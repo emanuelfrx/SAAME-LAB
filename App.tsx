@@ -33,7 +33,7 @@ import { TheoreticalTooltip } from './components/TheoreticalTooltip';
 import { AnalysisCanvas } from './components/AnalysisCanvas';
 import { MethodVisualizer } from './components/MethodVisualizer';
 // Added 'Home' to the imports from lucide-react
-import { ArrowRight, Activity, Type, MousePointerClick, RefreshCcw, Loader2, PlayCircle, Columns, Home, CheckCircle2, HelpCircle, X, Target, Zap, Layout } from 'lucide-react';
+import { ArrowRight, Activity, Type, MousePointerClick, RefreshCcw, Loader2, PlayCircle, Columns, Home, CheckCircle2, HelpCircle, X, Target, Zap, Layout, Settings2, Layers } from 'lucide-react';
 import { CompareSpacingFlow } from './CompareSpacingFlow';
 
 const App: React.FC = () => {
@@ -1087,6 +1087,8 @@ const App: React.FC = () => {
                                 <OriginalCustomTuner 
                                     font={fonts[MethodType.ORIGINAL_CUSTOM]}
                                     originalFont={fonts[MethodType.ORIGINAL]}
+                                    tracyFont={fonts[MethodType.TRACY]}
+                                    sousaFont={fonts[MethodType.SOUSA]}
                                     settings={originalCustomSettings}
                                     onSettingsChange={setOriginalCustomSettings}
                                 />
@@ -1227,13 +1229,17 @@ const App: React.FC = () => {
                     </h2>
                     <button 
                         onClick={() => setStep(AppStep.PREPARATION)}
-                        className="text-sm sm:text-base text-blue-400 hover:text-blue-300 flex items-center gap-1 dark:bg-gray-900 bg-gray-100 px-3 py-1.5 rounded-lg dark:hover:bg-gray-800 hover:bg-gray-200 transition-colors w-full sm:w-auto justify-center focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="flex items-center justify-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-all shadow-lg shadow-indigo-900/20 border border-indigo-400/30 group active:scale-95 w-full sm:w-auto"
                     >
-                        <RefreshCcw className="w-3 h-3" /> <span className="inline">Ajustar Configurações</span>
+                        <Settings2 className="w-4 h-4 group-hover:rotate-45 transition-transform" /> 
+                        <span className="font-bold tracking-tight">Ajustar Métricas Técnicas</span>
                     </button>
                 </div>
                 <div className="flex-1 min-h-0 min-h-[600px] lg:min-h-0">
-                    <AnalysisCanvas fonts={fonts} onUpdateGlyph={handleUpdateIndividualGlyph} />
+                    <AnalysisCanvas 
+                      fonts={fonts} 
+                      onUpdateGlyph={handleUpdateIndividualGlyph} 
+                    />
                 </div>
             </div>
         )}

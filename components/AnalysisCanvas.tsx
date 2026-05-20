@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { useTheme } from './useTheme';
 import { TracySettings, FontState, MethodType } from '../types';
-import { Layers, Type, AlignJustify, Download, BarChart2, Columns, ArrowUpDown, FileText, Loader2, Search, X, Settings2, Edit2 } from 'lucide-react';
+import { Layers, Type, AlignJustify, Download, BarChart2, Columns, ArrowUpDown, FileText, Loader2, Search, X, Edit2 } from 'lucide-react';
 import { calculateAverageSB, downloadFont, getCharMetrics, generateFontFaceCSS } from '../services/fontService';
 import { motion, AnimatePresence } from 'motion/react';
 import { SpacingDiagram } from './SpacingDiagram';
@@ -121,9 +121,45 @@ const RemainingGlyphsView = ({ font, method, searchQuery = '', onGlyphClick }: {
 export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompareMode = false, customLabels, onUpdateGlyph }) => {
   const { isDark } = useTheme();
   const [testText, setTestText] = useState(PARAGRAPH_TEXT);
-  const [fontSize, setFontSize] = useState(18);
-  const [lineHeight, setLineHeight] = useState(1.5);
-  const [viewMode, setViewMode] = useState<'stack' | 'overlay' | 'metrics' | 'side-by-side'>('side-by-side');
+  const [analysisPreset, setAnalysisPreset] = useState<'paragraph' | 'words-overlay' | 'custom'>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('saame_analysis_preset') : null;
+    if (saved && ['paragraph', 'words-overlay', 'custom'].includes(saved)) {
+      return saved as any;
+    }
+    return 'paragraph';
+  });
+
+  React.useEffect(() => {
+    localStorage.setItem('saame_analysis_preset', analysisPreset);
+  }, [analysisPreset]);
+
+  const [fontSize, setFontSize] = useState(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('saame_font_size') : null;
+    return saved ? Number(saved) : 18;
+  });
+
+  React.useEffect(() => {
+    localStorage.setItem('saame_font_size', fontSize.toString());
+  }, [fontSize]);
+  const [lineHeight, setLineHeight] = useState(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('saame_line_height') : null;
+    return saved ? Number(saved) : 1.5;
+  });
+
+  React.useEffect(() => {
+    localStorage.setItem('saame_line_height', lineHeight.toString());
+  }, [lineHeight]);
+  const [viewMode, setViewMode] = useState<'stack' | 'overlay' | 'metrics' | 'side-by-side'>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('saame_view_mode') : null;
+    if (saved && ['stack', 'overlay', 'metrics', 'side-by-side'].includes(saved)) {
+      return saved as any;
+    }
+    return 'side-by-side';
+  });
+
+  React.useEffect(() => {
+    localStorage.setItem('saame_view_mode', viewMode);
+  }, [viewMode]);
   const [selectedDiagramMethod, setSelectedDiagramMethod] = useState<MethodType>(MethodType.TRACY);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -135,6 +171,38 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
   } | null>(null);
   const [modalTestText, setModalTestText] = useState<string>('');
   const [isModalEditing, setIsModalEditing] = useState(false);
+  const [activeMethods, setActiveMethods] = useState<MethodType[]>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('saame_comparison_methods') : null;
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (e) {}
+    }
+    return [
+      MethodType.ORIGINAL,
+      MethodType.ORIGINAL_CUSTOM,
+      MethodType.TRACY,
+      MethodType.SOUSA
+    ];
+  });
+
+  React.useEffect(() => {
+    localStorage.setItem('saame_comparison_methods', JSON.stringify(activeMethods));
+  }, [activeMethods]);
+
+  const toggleMethod = (method: MethodType) => {
+    setActiveMethods(prev => {
+        if (prev.includes(method)) {
+            if (prev.length === 1) return prev; // Keep at least one
+            return prev.filter(m => m !== method);
+        }
+        return [...prev, method].sort((a, b) => {
+            const order = [MethodType.ORIGINAL, MethodType.ORIGINAL_CUSTOM, MethodType.TRACY, MethodType.SOUSA];
+            return order.indexOf(a) - order.indexOf(b);
+        });
+    });
+  };
 
   // Reset modal state on character change
   React.useEffect(() => {
@@ -172,9 +240,10 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
       return f?.fontObj ? calculateAverageSB(f.fontObj) : 0;
   };
 
-  const setPreset = (text: string, size: number) => {
+  const setPreset = (text: string, size: number, presetType: 'paragraph' | 'words-overlay') => {
       setTestText(text);
       setFontSize(size);
+      setAnalysisPreset(presetType);
   };
 
   // --- PRECISE METRIC CALCULATIONS ---
@@ -381,11 +450,14 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                     if (viewMode === 'overlay') {
                         const overlayTextElements = element.querySelectorAll('p');
                         overlayTextElements.forEach(p => {
-                            if (p.style.color === 'transparent') {
-                                // Darken the original reference stroke for white paper
-                                if (p.closest('.overlay-reference-text')) {
-                                    p.style.webkitTextStroke = '0.8px rgba(0, 0, 0, 0.4)';
-                                }
+                            if (p.closest('.overlay-reference-text')) {
+                                // Reference as Solid Fill for PDF
+                                p.style.color = 'rgba(0, 0, 0, 0.1)';
+                                p.style.webkitTextStroke = 'none';
+                            } else {
+                                // Adjusted methods keep their colored outlines
+                                // We don't want the general black text logic to kill their outlines
+                                p.style.color = 'transparent';
                             }
                         });
                     }
@@ -743,10 +815,10 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                 <span className="text-xs dark:text-gray-400 text-gray-600 hidden sm:inline">em</span>
             </div>
 
-            <div className="flex gap-1 dark:bg-gray-700/50 bg-gray-300/50 rounded p-1">
+            <div className="flex gap-1 dark:bg-gray-700/50 bg-gray-300/50 rounded p-1 shadow-inner">
                  <button 
                     onClick={() => setViewMode('side-by-side')}
-                    className={`p-1.5 rounded transition-all ${viewMode === 'side-by-side' ? 'bg-blue-600 dark:text-white text-slate-900 shadow' : 'dark:text-gray-400 text-gray-600 dark:hover:bg-gray-600 hover:bg-gray-400'}`}
+                    className={`p-2 rounded-md transition-all ${viewMode === 'side-by-side' ? 'bg-indigo-600 text-white shadow-lg scale-105 z-10' : 'dark:text-gray-500 text-gray-500 opacity-60 hover:opacity-100 dark:hover:bg-gray-600 hover:bg-gray-400'}`}
                     title="Lado a Lado"
                  >
                     <Columns className="w-4 h-4" />
@@ -754,26 +826,45 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                  {!isCompareMode && (
                  <button 
                     onClick={() => setViewMode('stack')}
-                    className={`p-1.5 rounded transition-all ${viewMode === 'stack' ? 'bg-blue-600 dark:text-white text-slate-900 shadow' : 'dark:text-gray-400 text-gray-600 dark:hover:bg-gray-600 hover:bg-gray-400'}`}
-                    title="Visualização Empilhada"
+                    className={`p-2 rounded-md transition-all ${viewMode === 'stack' ? 'bg-indigo-600 text-white shadow-lg scale-105 z-10' : 'dark:text-gray-500 text-gray-500 opacity-60 hover:opacity-100 dark:hover:bg-gray-600 hover:bg-gray-400'}`}
+                    title="Texto Corrido (Blocos)"
                  >
                     <AlignJustify className="w-4 h-4" />
                  </button>
                  )}
                  <button 
                     onClick={() => setViewMode('overlay')}
-                    className={`p-1.5 rounded transition-all ${viewMode === 'overlay' ? 'bg-blue-600 dark:text-white text-slate-900 shadow' : 'dark:text-gray-400 text-gray-600 dark:hover:bg-gray-600 hover:bg-gray-400'}`}
+                    className={`p-2 rounded-md transition-all ${viewMode === 'overlay' ? 'bg-indigo-600 text-white shadow-lg scale-105 z-10' : 'dark:text-gray-500 text-gray-500 opacity-60 hover:opacity-100 dark:hover:bg-gray-600 hover:bg-gray-400'}`}
                     title="Visualização Overlay"
                  >
                     <Layers className="w-4 h-4" />
                  </button>
                  <button 
                     onClick={() => setViewMode('metrics')}
-                    className={`p-1.5 rounded transition-all ${viewMode === 'metrics' ? 'bg-blue-600 dark:text-white text-slate-900 shadow' : 'dark:text-gray-400 text-gray-600 dark:hover:bg-gray-600 hover:bg-gray-400'}`}
+                    className={`p-2 rounded-md transition-all ${viewMode === 'metrics' ? 'bg-indigo-600 text-white shadow-lg scale-105 z-10' : 'dark:text-gray-500 text-gray-500 opacity-60 hover:opacity-100 dark:hover:bg-gray-600 hover:bg-gray-400'}`}
                     title="Dados de Métricas"
                  >
                     <BarChart2 className="w-4 h-4" />
                  </button>
+            </div>
+
+            {/* Method Selectors */}
+            <div className="flex flex-wrap gap-1 dark:bg-gray-700/50 bg-gray-300/50 rounded p-1 ml-auto lg:ml-0 shadow-inner">
+                <span className="text-[10px] font-black dark:text-gray-500 text-gray-500 uppercase px-2 flex items-center">Comparar:</span>
+                {[
+                    { type: MethodType.ORIGINAL, label: 'Orig' },
+                    { type: MethodType.ORIGINAL_CUSTOM, label: 'Cust' },
+                    { type: MethodType.TRACY, label: 'Tracy' },
+                    { type: MethodType.SOUSA, label: 'Sousa' }
+                ].map((m) => (
+                    <button 
+                        key={m.type}
+                        onClick={() => toggleMethod(m.type)}
+                        className={`px-3 py-1 text-xs font-black rounded-md transition-all ${activeMethods.includes(m.type) ? 'bg-indigo-600 text-white shadow-md scale-105 z-10' : 'dark:text-gray-500 text-gray-500 opacity-60 hover:opacity-100 dark:hover:bg-gray-600 hover:bg-gray-400'}`}
+                    >
+                        {m.label}
+                    </button>
+                ))}
             </div>
 
             {/* UPDATED: PDF Export Button for Side-by-Side and Overlay */}
@@ -794,13 +885,39 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
             <div className="flex-1 flex flex-col sm:flex-row gap-2">
             <textarea 
                 value={testText} 
-                onChange={(e) => setTestText(e.target.value)}
+                onChange={(e) => {
+                    setTestText(e.target.value);
+                    setAnalysisPreset('custom');
+                }}
                 className="flex-[2] dark:bg-gray-700 bg-gray-300 border dark:border-gray-600 border-gray-400 rounded px-4 py-3 text-lg dark:text-gray-200 text-gray-800 font-sans min-w-0 resize-none h-24 sm:h-20 leading-tight"
                 placeholder="Texto..."
             />
             <div className="flex sm:flex-col gap-1 justify-center">
-                 <button onClick={() => setPreset(PARAGRAPH_TEXT, 18)} className="text-base bg-blue-900/40 hover:bg-blue-900/60 border border-blue-800 px-6 py-3 rounded text-blue-200 whitespace-nowrap w-full flex-1 sm:flex-none font-bold">Parágrafo</button>
-                 <button onClick={() => { setTestText("HHOOHOH\nnnoonon\nminimum\nOverwoman\ngroundling\nPalaeoclimatologist"); setFontSize(80); setViewMode('overlay'); }} className="text-base bg-purple-900/40 hover:bg-purple-900/60 border border-purple-800 px-6 py-3 rounded text-purple-200 whitespace-nowrap w-full flex-1 sm:flex-none font-bold">Palavras Overlay</button>
+                 <button 
+                    onClick={() => setPreset(PARAGRAPH_TEXT, 18, 'paragraph')} 
+                    className={`text-sm md:text-base px-4 md:px-6 py-2.5 md:py-3 rounded whitespace-nowrap w-full flex-1 sm:flex-none font-bold transition-all border ${
+                        analysisPreset === 'paragraph' 
+                        ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-900/20 scale-[1.02] opacity-100' 
+                        : 'dark:bg-blue-900/10 bg-blue-100/50 dark:text-blue-400/60 text-blue-600/50 border-blue-800/20 opacity-60 hover:opacity-80'
+                    }`}
+                 >
+                    Parágrafo
+                 </button>
+                 <button 
+                    onClick={() => { 
+                        setTestText("HHOOHOH\nnnoonon\nminimum\nOverwoman\ngroundling\nPalaeoclimatologist"); 
+                        setFontSize(80); 
+                        setViewMode('overlay'); 
+                        setAnalysisPreset('words-overlay');
+                    }} 
+                    className={`text-sm md:text-base px-4 md:px-6 py-2.5 md:py-3 rounded whitespace-nowrap w-full flex-1 sm:flex-none font-bold transition-all border ${
+                        analysisPreset === 'words-overlay' 
+                        ? 'bg-purple-600 text-white border-purple-500 shadow-lg shadow-purple-900/20 scale-[1.02] opacity-100' 
+                        : 'dark:bg-purple-900/10 bg-purple-100/50 dark:text-purple-400/60 text-purple-600/50 border-purple-800/20 opacity-60 hover:opacity-80'
+                    }`}
+                 >
+                    Palavras Overlay
+                 </button>
             </div>
         </div>
       </div>
@@ -812,62 +929,71 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
              <div 
                 ref={exportRef} 
                 data-export-target="true"
-                className={`grid ${isCompareMode ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1 md:grid-cols-4'} gap-0 h-full divide-y md:divide-y-0 md:divide-x divide-gray-800 dark:bg-gray-950 bg-gray-50`}
+                className={`grid ${
+                    activeMethods.length === 1 ? 'grid-cols-1' : 
+                    activeMethods.length === 2 ? 'grid-cols-1 md:grid-cols-2' : 
+                    activeMethods.length === 3 ? 'grid-cols-1 md:grid-cols-3' : 
+                    'grid-cols-1 md:grid-cols-4'
+                } gap-0 h-full divide-y md:divide-y-0 md:divide-x divide-gray-800 dark:bg-gray-950 bg-gray-50 overflow-visible`}
              >
-                {/* Original */}
-                <div className="flex flex-col h-full dark:bg-gray-900/30 bg-gray-100/30 order-1 overflow-y-auto">
+                {/* 1. Original */}
+                {activeMethods.includes(MethodType.ORIGINAL) && (
+                <div className="flex flex-col h-full dark:bg-gray-900/30 bg-gray-100/30 order-1 overflow-visible">
                      <div className="p-3 border-b dark:border-gray-800 border-gray-200 dark:bg-gray-900 bg-gray-100 flex justify-between items-center sticky top-0 z-10" data-html2canvas-ignore>
                          <h4 className="text-sm font-bold uppercase tracking-widest dark:text-gray-400 text-gray-600 truncate max-w-[200px]" title={labelOriginal}>
-                             {labelOriginal}
+                            {labelOriginal}
                          </h4>
                          <button onClick={() => handleExport(MethodType.ORIGINAL)} className="text-base dark:hover:text-white hover:text-slate-900 flex gap-2.5 items-center dark:bg-gray-800 bg-gray-200 dark:hover:bg-gray-700 hover:bg-gray-300 px-4 py-2.5 rounded-md border dark:border-gray-700 border-gray-300 transition-colors dark:text-gray-300 text-gray-700 shadow-sm font-semibold" data-html2canvas-ignore><Download className="w-5 h-5"/> OTF</button>
                      </div>
-                     <div className="p-6 md:p-8 flex-1 overflow-y-auto">
-                        <p style={{ fontFamily: originalFont?.fullFontFamily || 'serif', fontSize: `${fontSize}px`, lineHeight: lineHeight }} className="dark:text-gray-300 text-gray-700 whitespace-pre-wrap break-words">
+                     <div className="p-6 md:p-8 flex-1 overflow-visible flex items-start justify-start">
+                        <p style={{ fontFamily: originalFont?.fullFontFamily || 'serif', fontSize: `${fontSize}px`, lineHeight: lineHeight }} className="dark:text-gray-300 text-gray-700 whitespace-pre-wrap break-words text-left w-full h-auto">
                             {testText}
                         </p>
                      </div>
                 </div>
+                )}
 
-                {/* Original Custom Method - Hidden in Compare Mode */}
-                {!isCompareMode && (
-                    <div className="flex flex-col h-full order-2 overflow-y-auto">
+                {/* 1.5 Original Custom */}
+                {activeMethods.includes(MethodType.ORIGINAL_CUSTOM) && (
+                    <div className="flex flex-col h-full order-2 overflow-visible">
                          <div className="p-3 border-b dark:border-gray-800 border-gray-200 dark:bg-gray-900 bg-gray-100 flex justify-between items-center sticky top-0 z-10" data-html2canvas-ignore>
                              <h4 className="text-sm font-bold uppercase tracking-widest dark:text-slate-400 text-slate-600">Original Custom</h4>
                              <button onClick={() => handleExport(MethodType.ORIGINAL_CUSTOM)} className="text-base dark:text-slate-400 text-slate-600 dark:hover:text-white hover:text-slate-900 flex gap-2.5 items-center dark:bg-gray-800 bg-gray-200 dark:hover:bg-gray-700 hover:bg-gray-300 px-4 py-2.5 rounded-md border dark:border-gray-700 border-gray-300 transition-colors shadow-sm font-semibold" data-html2canvas-ignore><Download className="w-5 h-5"/> OTF</button>
                          </div>
-                         <div className="p-6 md:p-8 flex-1 overflow-y-auto">
-                            <p style={{ fontFamily: fonts[MethodType.ORIGINAL_CUSTOM]?.fullFontFamily || 'serif', fontSize: `${fontSize}px`, lineHeight: lineHeight }} className="dark:text-gray-200 text-gray-800 whitespace-pre-wrap break-words">
+                         <div className="p-6 md:p-8 flex-1 overflow-visible flex items-start justify-start">
+                            <p style={{ fontFamily: fonts[MethodType.ORIGINAL_CUSTOM]?.fullFontFamily || 'serif', fontSize: `${fontSize}px`, lineHeight: lineHeight }} className="dark:text-gray-200 text-gray-800 whitespace-pre-wrap break-words text-left w-full h-auto">
                                 {testText}
                             </p>
                          </div>
                     </div>
                 )}
 
-                {/* Adjusted / Tracy */}
-                <div className="flex flex-col h-full order-3 overflow-y-auto">
+                {/* 2. Adjusted / Tracy */}
+                {activeMethods.includes(MethodType.TRACY) && (
+                <div className={`flex flex-col h-full order-3 overflow-visible ${activeMethods.length === 1 ? 'dark:bg-gray-900/40 bg-gray-100/40' : ''}`}>
                      <div className="p-3 border-b dark:border-gray-800 border-gray-200 dark:bg-gray-900 bg-gray-100 flex justify-between items-center sticky top-0 z-10" data-html2canvas-ignore>
                          <h4 className={`text-sm font-bold uppercase tracking-widest ${isCompareMode ? 'text-cyan-400' : 'text-pink-400'} truncate max-w-[200px]`} title={labelTracy}>
                             {labelTracy}
                          </h4>
                          <button onClick={() => handleExport(MethodType.TRACY)} className={`text-base dark:hover:text-white hover:text-slate-900 flex gap-2.5 items-center dark:bg-gray-800 bg-gray-200 dark:hover:bg-gray-700 hover:bg-gray-300 px-4 py-2.5 rounded-md border dark:border-gray-700 border-gray-300 transition-colors shadow-sm font-semibold ${isCompareMode ? 'dark:text-cyan-300 text-cyan-700 dark:hover:text-cyan-100 hover:text-cyan-900' : 'dark:text-pink-300 text-pink-700 dark:hover:text-pink-100 hover:text-pink-900'}`} data-html2canvas-ignore><Download className="w-5 h-5"/> OTF</button>
                      </div>
-                     <div className="p-6 md:p-8 flex-1 overflow-y-auto">
-                        <p style={{ fontFamily: tracyFont?.fullFontFamily || 'serif', fontSize: `${fontSize}px`, lineHeight: lineHeight }} className="dark:text-white text-slate-900 whitespace-pre-wrap break-words">
+                     <div className="p-6 md:p-8 flex-1 overflow-visible flex items-start justify-start">
+                        <p style={{ fontFamily: tracyFont?.fullFontFamily || 'serif', fontSize: `${fontSize}px`, lineHeight: lineHeight }} className="dark:text-white text-slate-900 whitespace-pre-wrap break-words text-left w-full h-auto">
                             {testText}
                         </p>
                      </div>
                 </div>
+                )}
 
-                {/* Sousa - Hidden in Compare Mode */}
-                {!isCompareMode && (
-                <div className="flex flex-col h-full order-4 overflow-y-auto">
+                {/* 3. Sousa */}
+                {activeMethods.includes(MethodType.SOUSA) && (
+                <div className="flex flex-col h-full order-4 overflow-visible">
                      <div className="p-3 border-b dark:border-gray-800 border-gray-200 dark:bg-gray-900 bg-gray-100 flex justify-between items-center sticky top-0 z-10" data-html2canvas-ignore>
                          <h4 className="text-sm font-bold uppercase tracking-widest text-cyan-400 truncate max-w-[200px]">Método Miguel Sousa</h4>
-                         <button onClick={() => handleExport(MethodType.SOUSA)} className="text-base dark:text-cyan-300 text-cyan-700 dark:hover:text-white hover:text-slate-900 flex gap-2.5 items-center dark:bg-gray-800 bg-gray-200 dark:hover:bg-gray-700 hover:bg-gray-300 px-4 py-2.5 rounded-md border dark:border-gray-700 border-gray-300 transition-colors shadow-sm font-semibold" data-html2canvas-ignore><Download className="w-5 h-5"/> OTF</button>
+                         <button onClick={() => handleExport(MethodType.SOUSA)} className="text-base dark:text-cyan-400 text-cyan-600 dark:hover:text-white hover:text-slate-900 flex gap-2.5 items-center dark:bg-gray-800 bg-gray-200 dark:hover:bg-gray-700 hover:bg-gray-300 px-4 py-2.5 rounded-md border dark:border-gray-700 border-gray-300 transition-colors shadow-sm font-semibold" data-html2canvas-ignore><Download className="w-5 h-5"/> OTF</button>
                      </div>
-                     <div className="p-6 md:p-8 flex-1 overflow-y-auto">
-                        <p style={{ fontFamily: sousaFont?.fullFontFamily || 'serif', fontSize: `${fontSize}px`, lineHeight: lineHeight }} className="dark:text-white text-slate-900 whitespace-pre-wrap break-words">
+                     <div className="p-6 md:p-8 flex-1 overflow-visible flex items-start justify-start">
+                        <p style={{ fontFamily: sousaFont?.fullFontFamily || 'serif', fontSize: `${fontSize}px`, lineHeight: lineHeight }} className="dark:text-white text-slate-900 whitespace-pre-wrap break-words text-left w-full h-auto">
                             {testText}
                         </p>
                      </div>
@@ -877,34 +1003,41 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
         )}
 
         {viewMode === 'stack' && (
-             <div className="flex flex-col divide-y divide-gray-800 max-w-5xl mx-auto p-4 md:p-12 gap-12">
+             <div className="flex flex-col divide-y divide-gray-800 max-w-5xl mx-auto p-4 md:p-12 gap-12 overflow-visible">
+                {activeMethods.includes(MethodType.ORIGINAL) && (
                 <div>
                      <h4 className="text-sm font-bold uppercase tracking-widest dark:text-gray-500 text-gray-500 mb-4">{labelOriginal}</h4>
-                     <p style={{ fontFamily: originalFont?.fullFontFamily || 'serif', fontSize: `${fontSize}px`, lineHeight: lineHeight }} className="dark:text-gray-400 text-gray-600 whitespace-pre-wrap mb-4">
+                     <p style={{ fontFamily: originalFont?.fullFontFamily || 'serif', fontSize: `${fontSize}px`, lineHeight: lineHeight }} className="dark:text-gray-400 text-gray-600 whitespace-pre-wrap mb-4 text-left">
                         {testText}
                     </p>
                     <button onClick={() => handleExport(MethodType.ORIGINAL)} className="text-sm dark:text-gray-500 text-gray-500 dark:hover:text-white hover:text-slate-900 flex gap-2 items-center dark:bg-gray-800 bg-gray-200 px-3 py-1.5 rounded"><Download className="w-3 h-3"/> Download ORIGINAL</button>
                 </div>
-                {!isCompareMode && (
+                )}
+                
+                {activeMethods.includes(MethodType.ORIGINAL_CUSTOM) && (
                 <div className="pt-12">
-                    <h4 className="text-sm font-bold uppercase tracking-widest dark:text-slate-500 text-slate-500 mb-4">Original Custom</h4>
-                    <p style={{ fontFamily: fonts[MethodType.ORIGINAL_CUSTOM]?.fullFontFamily || 'serif', fontSize: `${fontSize}px`, lineHeight: lineHeight }} className="dark:text-slate-300 text-slate-700 whitespace-pre-wrap mb-4">
+                     <h4 className="text-sm font-bold uppercase tracking-widest dark:text-slate-500 text-slate-500 mb-4">Original Custom</h4>
+                     <p style={{ fontFamily: fonts[MethodType.ORIGINAL_CUSTOM]?.fullFontFamily || 'serif', fontSize: `${fontSize}px`, lineHeight: lineHeight }} className="dark:text-slate-300 text-slate-700 whitespace-pre-wrap mb-4 text-left">
                         {testText}
                     </p>
                     <button onClick={() => handleExport(MethodType.ORIGINAL_CUSTOM)} className="text-sm dark:text-slate-500 text-slate-500 dark:hover:text-white hover:text-slate-900 flex gap-2 items-center dark:bg-gray-800 bg-gray-200 px-3 py-1.5 rounded"><Download className="w-3 h-3"/> Download ORIGINAL_CUSTOM</button>
                 </div>
                 )}
+                
+                {activeMethods.includes(MethodType.TRACY) && (
                 <div className="pt-12">
                     <h4 className="text-sm font-bold uppercase tracking-widest text-pink-500 mb-4">{labelTracy}</h4>
-                    <p style={{ fontFamily: tracyFont?.fullFontFamily || 'serif', fontSize: `${fontSize}px`, lineHeight: lineHeight }} className="dark:text-white text-slate-900 whitespace-pre-wrap mb-4">
+                    <p style={{ fontFamily: tracyFont?.fullFontFamily || 'serif', fontSize: `${fontSize}px`, lineHeight: lineHeight }} className="dark:text-white text-slate-900 whitespace-pre-wrap mb-4 text-left">
                         {testText}
                     </p>
                     <button onClick={() => handleExport(MethodType.TRACY)} className="text-sm dark:text-pink-500 text-pink-600 dark:hover:text-white hover:text-slate-900 flex gap-2 items-center dark:bg-gray-800 bg-gray-200 px-3 py-1.5 rounded"><Download className="w-3 h-3"/> Download TRACY</button>
                 </div>
-                {!isCompareMode && (
+                )}
+                
+                {activeMethods.includes(MethodType.SOUSA) && (
                 <div className="pt-12">
                     <h4 className="text-sm font-bold uppercase tracking-widest text-cyan-500 mb-4">Método Miguel Sousa</h4>
-                    <p style={{ fontFamily: sousaFont?.fullFontFamily || 'serif', fontSize: `${fontSize}px`, lineHeight: lineHeight }} className="dark:text-white text-slate-900 whitespace-pre-wrap mb-4">
+                    <p style={{ fontFamily: sousaFont?.fullFontFamily || 'serif', fontSize: `${fontSize}px`, lineHeight: lineHeight }} className="dark:text-white text-slate-900 whitespace-pre-wrap mb-4 text-left">
                         {testText}
                     </p>
                     <button onClick={() => handleExport(MethodType.SOUSA)} className="text-sm dark:text-cyan-500 text-cyan-600 dark:hover:text-white hover:text-slate-900 flex gap-2 items-center dark:bg-gray-800 bg-gray-200 px-3 py-1.5 rounded"><Download className="w-3 h-3"/> Download SOUSA</button>
@@ -940,12 +1073,12 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                 <div className="overlay-legend absolute bottom-6 right-6 p-4 dark:bg-gray-900/60 bg-gray-100/60 backdrop-blur-md rounded-xl border dark:border-gray-800 border-gray-200 shadow-2xl flex flex-col gap-3 min-w-[180px] z-[50]" data-html2canvas-ignore>
                     <h5 className="text-[11px] font-black uppercase tracking-[0.2em] dark:text-gray-500 text-gray-500 border-b dark:border-gray-800 border-gray-200 pb-2 mb-1">Métricas em Tempo Real</h5>
                     <div className="flex items-center gap-3">
-                        <div className="w-2.5 h-2.5 rounded-sm border border-gray-500"></div>
-                        <span className="text-xs dark:text-gray-300 text-gray-700 font-bold">Original Reference</span>
+                        <div className="w-2.5 h-2.5 rounded-sm dark:bg-white/10 bg-black/10"></div>
+                        <span className="text-xs dark:text-gray-300 text-gray-700 font-bold">Ref. Preenchida (Massa)</span>
                     </div>
                     <div className="flex items-center gap-3">
                         <div className={`w-2.5 h-2.5 rounded-sm border ${isCompareMode ? 'border-cyan-400' : 'border-pink-500'}`}></div>
-                        <span className="text-xs dark:text-gray-300 text-gray-700 font-bold">Walter Tracy Path</span>
+                        <span className="text-xs dark:text-gray-300 text-gray-700 font-bold">Ajuste Contorno (Tracy)</span>
                     </div>
                     {!isCompareMode && (
                     <div className="flex items-center gap-3">
@@ -970,8 +1103,8 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                             style={{ 
                                 fontFamily: originalFont?.fullFontFamily || 'serif', 
                                 fontSize: `${fontSize}px`,
-                                color: 'transparent',
-                                WebkitTextStroke: '0.8px rgba(255, 255, 255, 0.2)',
+                                color: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
+                                WebkitTextStroke: 'none',
                                 transition: 'all 0.3s ease'
                             }} 
                             className="whitespace-pre-wrap break-words text-center"
@@ -987,7 +1120,7 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                                 fontFamily: tracyFont?.fullFontFamily || 'serif', 
                                 fontSize: `${fontSize}px`,
                                 color: 'transparent',
-                                WebkitTextStroke: `0.8px ${isCompareMode ? 'rgba(6, 182, 212, 0.7)' : 'rgba(236, 72, 153, 0.6)'}`,
+                                WebkitTextStroke: `1px ${isCompareMode ? (isDark ? '#06B6D4' : '#0891B2') : (isDark ? '#EC4899' : '#DB2777')}`,
                                 transform: `translateY(${expCorrectionY}px)`,
                                 transition: 'all 0.3s ease'
                             }} 
@@ -1005,7 +1138,7 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                                 fontFamily: sousaFont?.fullFontFamily || 'serif', 
                                 fontSize: `${fontSize}px`,
                                 color: 'transparent',
-                                WebkitTextStroke: '0.8px rgba(6, 182, 212, 0.5)',
+                                WebkitTextStroke: `1px ${isDark ? '#06B6D4' : '#0891B2'}`,
                                 transform: `translateY(${expCorrectionY}px)`,
                                 transition: 'all 0.3s ease'
                             }} 

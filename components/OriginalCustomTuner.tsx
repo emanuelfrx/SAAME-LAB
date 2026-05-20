@@ -1,14 +1,16 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { FontState, OriginalCustomSettings } from '../types';
 import { GlyphVisualizer } from './GlyphVisualizer';
-import { RotateCcw, Eye, Layers, X, Edit2 } from 'lucide-react';
+import { RotateCcw, Eye, Layers, X, Edit2, Download } from 'lucide-react';
 
 export const OriginalCustomTuner: React.FC<{ 
     font: FontState | null, 
     originalFont: FontState | null,
+    tracyFont?: FontState | null,
+    sousaFont?: FontState | null,
     settings: OriginalCustomSettings, 
     onSettingsChange: (s: OriginalCustomSettings) => void 
-}> = ({ font, originalFont, settings, onSettingsChange }) => {
+}> = ({ font, originalFont, tracyFont, sousaFont, settings, onSettingsChange }) => {
     const [selectedChar, setSelectedChar] = useState<string>('H');
     const [inputChar, setInputChar] = useState<string>('H');
     const [inputEditingChar, setInputEditingChar] = useState<string>('');
@@ -106,6 +108,18 @@ export const OriginalCustomTuner: React.FC<{
     };
 
     const hasOverride = !!settings.overrides[targetChar];
+
+    const importMetricsFrom = (sourceFont: FontState | null, sourceName: string) => {
+        if (!sourceFont || !sourceFont.fontObj) return;
+        const glyph = sourceFont.fontObj.charToGlyph(targetChar);
+        if (!glyph) return;
+        const box = glyph.getBoundingBox();
+        const lsb = Math.round(box.x1);
+        const rsb = Math.round(glyph.advanceWidth - box.x2);
+        
+        const newOverrides = { ...settings.overrides, [targetChar]: { lsb, rsb } };
+        onSettingsChange({ ...settings, overrides: newOverrides });
+    };
 
     return (
         <div className="dark:bg-slate-900/50 bg-slate-100/50 backdrop-blur rounded-2xl p-4 md:p-6 border dark:border-slate-800 border-slate-200 h-full overflow-y-auto custom-scrollbar shadow-2xl relative">
@@ -207,6 +221,38 @@ export const OriginalCustomTuner: React.FC<{
                                         </div>
                                     </div>
                                 )}
+                            </div>
+
+                            {/* Import Controls */}
+                            <div className="dark:bg-slate-900/50 bg-slate-50 p-4 rounded-2xl border dark:border-slate-800 border-slate-200 shadow-inner">
+                                <label className="text-xs font-black dark:text-slate-400 text-slate-600 uppercase tracking-widest mb-3 block flex items-center gap-2">
+                                    <Download className="w-3.5 h-3.5" /> IMPORTAR DE:
+                                </label>
+                                <div className="grid grid-cols-3 gap-2">
+                                    <button 
+                                        onClick={() => importMetricsFrom(originalFont, 'Original')} 
+                                        className="text-[10px] sm:text-xs font-bold uppercase py-2 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors shadow-sm"
+                                        title="Manter / restaurar métricas originais para esta letra"
+                                    >
+                                        Original
+                                    </button>
+                                    <button 
+                                        onClick={() => importMetricsFrom(tracyFont, 'Tracy')}
+                                        disabled={!tracyFont}
+                                        className="text-[10px] sm:text-xs font-bold uppercase py-2 bg-pink-500/10 text-pink-600 dark:text-pink-400 hover:bg-pink-500/20 disabled:opacity-50 disabled:cursor-not-allowed border border-pink-500/20 rounded-lg transition-colors shadow-sm"
+                                        title="Importar métricas geradas pelo método Tracy"
+                                    >
+                                        Tracy
+                                    </button>
+                                    <button 
+                                        onClick={() => importMetricsFrom(sousaFont, 'Sousa')}
+                                        disabled={!sousaFont}
+                                        className="text-[10px] sm:text-xs font-bold uppercase py-2 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/20 disabled:opacity-50 disabled:cursor-not-allowed border border-indigo-500/20 rounded-lg transition-colors shadow-sm"
+                                        title="Importar métricas ajustadas pelo método Sousa"
+                                    >
+                                        Sousa
+                                    </button>
+                                </div>
                             </div>
 
                             {/* LSB Slider */}
