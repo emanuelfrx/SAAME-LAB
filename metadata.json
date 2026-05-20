@@ -1,0 +1,8 @@
+{
+  "name": "SAAME Typography Lab",
+  "description": "Professional environment for glyph metric adjustment (Tracy/Sousa methods) and typographic spacing analysis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
