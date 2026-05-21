@@ -1,11 +1,12 @@
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { TracySettings, FontState } from '../types';
 import { Settings2, RotateCcw, Sparkles, Edit2, Layers } from 'lucide-react';
 import { GlyphVisualizer } from './GlyphVisualizer';
 import { calculateHarmonicSpacing, getCharMetrics, getCounterMetrics, getTargetSBPercentage } from '../services/fontService';
 import { TheoreticalTooltip } from './TheoreticalTooltip';
+import { useDebounce } from './useDebounce';
 
 // --- NEW COMPONENT: MetricExplanationPanel ---
 // Display theoretical data for master characters
@@ -354,13 +355,25 @@ export const MetricTuner: React.FC<MetricTunerProps> = ({ settings, onSettingsCh
   const [overrideChar, setOverrideChar] = useState<string>('B');
   const [inputOverrideChar, setInputOverrideChar] = useState<string>('B');
 
+  // Debounce settings before passing them up to the parent
+  const debouncedLocalSettings = useDebounce(localSettings, 400);
+
   useEffect(() => {
     setInputOverrideChar(overrideChar);
   }, [overrideChar]);
 
   useEffect(() => {
-    setLocalSettings(settings);
+    // If external settings change (e.g., loaded from somewhere), sync local state
+    // But don't do this if local changes are already in progress
+    if (JSON.stringify(settings) !== JSON.stringify(localSettings)) {
+        setLocalSettings(settings);
+    }
   }, [settings]);
+
+  // When debounced settings change, trigger the expensive external update
+  useEffect(() => {
+    onSettingsChange(debouncedLocalSettings);
+  }, [debouncedLocalSettings]);
 
   const handleChange = (char: keyof TracySettings, side: 'lsb' | 'rsb' | 'both', val: number) => {
     const newSettings = {
@@ -371,7 +384,6 @@ export const MetricTuner: React.FC<MetricTunerProps> = ({ settings, onSettingsCh
       }
     };
     setLocalSettings(newSettings);
-    onSettingsChange(newSettings);
   };
 
   const handleAutoCalc = (char: string) => {
@@ -387,7 +399,6 @@ export const MetricTuner: React.FC<MetricTunerProps> = ({ settings, onSettingsCh
           }
       };
       setLocalSettings(newSettings);
-      onSettingsChange(newSettings);
   };
 
   // --- Dynamic Character List Generation ---
@@ -469,7 +480,7 @@ export const MetricTuner: React.FC<MetricTunerProps> = ({ settings, onSettingsCh
           }
       };
       setLocalSettings(newSettings);
-      onSettingsChange(newSettings);
+      // Let debounce propagate
   };
 
   const resetOverride = () => {
@@ -480,7 +491,7 @@ export const MetricTuner: React.FC<MetricTunerProps> = ({ settings, onSettingsCh
           overrides: newOverrides
       };
       setLocalSettings(newSettings);
-      onSettingsChange(newSettings);
+      // Let debounce propagate
   };
 
   // Generate test context for overrides

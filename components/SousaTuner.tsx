@@ -6,6 +6,7 @@ import { generateAdhesionText, getCharMetrics } from '../services/fontService';
 import { Settings2, RotateCcw, ChevronDown, ChevronUp, Layers, Edit2 } from 'lucide-react';
 import { GlyphVisualizer } from './GlyphVisualizer';
 import { TheoreticalTooltip } from './TheoreticalTooltip';
+import { useDebounce } from './useDebounce';
 
 interface SousaTunerProps {
   settings: SousaSettings;
@@ -243,6 +244,9 @@ export const SousaTuner: React.FC<SousaTunerProps> = ({ settings, onSettingsChan
   const [overrideChar, setOverrideChar] = useState<string>('a');
   const [inputOverrideChar, setInputOverrideChar] = useState<string>('a');
 
+  // Debounce settings before passing them up
+  const debouncedLocalSettings = useDebounce(localSettings, 400);
+
   // Sync input local state
   useEffect(() => {
     setInputOverrideChar(overrideChar);
@@ -250,8 +254,15 @@ export const SousaTuner: React.FC<SousaTunerProps> = ({ settings, onSettingsChan
 
   // Sync prop changes to local state
   useEffect(() => {
-    setLocalSettings(settings);
+    if (JSON.stringify(settings) !== JSON.stringify(localSettings)) {
+        setLocalSettings(settings);
+    }
   }, [settings]);
+
+  // Propagate debounced changes
+  useEffect(() => {
+    onSettingsChange(debouncedLocalSettings);
+  }, [debouncedLocalSettings]);
 
   // --- Handlers ---
 
@@ -266,7 +277,6 @@ export const SousaTuner: React.FC<SousaTunerProps> = ({ settings, onSettingsChan
         }
     };
     setLocalSettings(newSettings);
-    onSettingsChange(newSettings);
   };
 
   const handleMasterChange = (char: 'n'|'o'|'H'|'O', side: 'lsb'|'rsb', val: number) => {
@@ -275,7 +285,6 @@ export const SousaTuner: React.FC<SousaTunerProps> = ({ settings, onSettingsChan
           [char]: { ...localSettings[char], [side]: val }
       };
       setLocalSettings(newSettings);
-      onSettingsChange(newSettings);
   };
 
   // --- Dynamic Character List Generation ---
@@ -358,7 +367,6 @@ export const SousaTuner: React.FC<SousaTunerProps> = ({ settings, onSettingsChan
           }
       };
       setLocalSettings(newSettings);
-      onSettingsChange(newSettings);
   };
 
   const resetOverride = () => {
@@ -366,7 +374,6 @@ export const SousaTuner: React.FC<SousaTunerProps> = ({ settings, onSettingsChan
       delete newOverrides[overrideChar];
       const newSettings = { ...localSettings, overrides: newOverrides };
       setLocalSettings(newSettings);
-      onSettingsChange(newSettings);
   };
 
   // Generate test context based on char case and group

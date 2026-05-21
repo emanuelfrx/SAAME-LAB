@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useTheme } from './useTheme';
 import { TracySettings, FontState, MethodType } from '../types';
 import { Layers, Type, AlignJustify, Download, BarChart2, Columns, ArrowUpDown, FileText, Loader2, Search, X, Edit2 } from 'lucide-react';
@@ -11,6 +11,33 @@ import { GlyphVisualizer } from './GlyphVisualizer';
 import { SequenceVisualizer } from './SequenceVisualizer';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
+
+import { useDebounce } from './useDebounce';
+
+// --- NEW COMPONENT: Skeleton Screen for loading/processing states ---
+const AnalysisSkeleton = () => (
+    <div className="w-full animate-pulse space-y-8 p-4 md:p-8">
+        <div className="flex justify-between items-center bg-slate-100 dark:bg-slate-800/50 h-16 rounded-2xl mb-8" />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div className="space-y-4">
+                <div className="h-4 bg-slate-100 dark:bg-slate-800/50 rounded w-1/4" />
+                <div className="h-64 bg-slate-100 dark:bg-slate-800/20 rounded-2xl" />
+            </div>
+            <div className="space-y-4">
+                <div className="h-4 bg-slate-100 dark:bg-slate-800/50 rounded w-1/4" />
+                <div className="h-64 bg-slate-100 dark:bg-slate-800/20 rounded-2xl" />
+            </div>
+        </div>
+        <div className="space-y-4">
+            <div className="h-4 bg-slate-100 dark:bg-slate-800/50 rounded w-1/4" />
+            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-4">
+                {[...Array(12)].map((_, i) => (
+                    <div key={i} className="h-16 bg-slate-100 dark:bg-slate-800/30 rounded-xl" />
+                ))}
+            </div>
+        </div>
+    </div>
+);
 
 interface AnalysisCanvasProps {
   fonts: Record<string, FontState | null>;
@@ -49,7 +76,14 @@ const RemainingGlyphItem = React.memo(({ g, font, borderColor, onClick }: { g: a
 ));
 
 // --- NEW COMPONENT: Displays metrics for glyphs NOT in the standard topology (Numbers, Punctuation, etc.) ---
-const RemainingGlyphsView = ({ font, method, searchQuery = '', onGlyphClick }: { font: FontState | null, method: MethodType, searchQuery?: string, onGlyphClick?: (char: string, lsb: number, rsb: number) => void }) => {
+const RemainingGlyphsView = React.memo(({ font, method, searchQuery = '', onGlyphClick }: { font: FontState | null, method: MethodType, searchQuery?: string, onGlyphClick?: (char: string, lsb: number, rsb: number) => void }) => {
+    const [displayLimit, setDisplayLimit] = useState(60);
+    
+    // Reset limit when searchQuery changes
+    useEffect(() => {
+        setDisplayLimit(60);
+    }, [searchQuery]);
+
     const glyphs = useMemo(() => {
         if (!font || !font.fontObj) return [];
         
@@ -61,17 +95,19 @@ const RemainingGlyphsView = ({ font, method, searchQuery = '', onGlyphClick }: {
         const found: Array<{ char: string, lsb: number, rsb: number, unicode: number }> = [];
         
         const numGlyphs = font.fontObj.glyphs.length;
+        // Optimization: Use a smaller subset for standard analysis unless searching
+        // Or if searching, still iterate but maybe we can optimize the lookup
         for (let i = 0; i < numGlyphs; i++) {
             const glyph = font.fontObj.glyphs.get(i);
             if (glyph.unicode) {
                 try {
                     const char = String.fromCodePoint(glyph.unicode);
-                    // Filter out standard chars (shown above)
-                    // Explicitly allow Space (char === ' ') or non-empty strings (Punctuation/Numbers)
                     if (!standardChars.has(char)) {
                         if (char.trim() !== '' || char === ' ') {
-                            const { lsb, rsb } = getCharMetrics(font.fontObj, char);
-                            found.push({ char, lsb, rsb, unicode: glyph.unicode });
+                            // Only calculate metrics for what we might actually show
+                            // but we need them for filtering? No, metrics aren't for filtering.
+                            // However, we need them for the display.
+                            found.push({ char, lsb: 0, rsb: 0, unicode: glyph.unicode });
                         }
                     }
                 } catch (e) {}
@@ -87,9 +123,15 @@ const RemainingGlyphsView = ({ font, method, searchQuery = '', onGlyphClick }: {
             : found;
 
         return filtered.sort((a, b) => a.unicode - b.unicode);
-    }, [font?.fontObj, searchQuery]); // Added searchQuery to dependency
+    }, [font?.fontObj, searchQuery]);
 
     if (!font || !font.fontObj || glyphs.length === 0) return null;
+
+    const visibleGlyphs = glyphs.slice(0, displayLimit).map(g => {
+        // Calculate metrics only for visible subset
+        const { lsb, rsb } = getCharMetrics(font.fontObj!, g.char);
+        return { ...g, lsb, rsb };
+    });
 
     const getStyles = () => {
         switch(method) {
@@ -106,20 +148,36 @@ const RemainingGlyphsView = ({ font, method, searchQuery = '', onGlyphClick }: {
 
     return (
         <div className="mt-8 pt-6 border-t dark:border-gray-800 border-gray-200">
-             <h4 className={`text-base font-bold uppercase mb-4 tracking-wider flex items-center gap-2 ${methodColor}`}>
-                 Glifos Complementares (Algarismos, Pontuação e Símbolos)
+             <h4 className={`text-sm font-black uppercase mb-4 tracking-widest flex items-center gap-2 ${methodColor}`}>
+                 {glyphs.length} Glifos Complementares
+                 {searchQuery && <span className="text-[10px] opacity-60 font-mono">(Filtro Ativo)</span>}
             </h4>
-            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-3">
-                {glyphs.map(g => (
+            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 xl:grid-cols-6 gap-3">
+                {visibleGlyphs.map(g => (
                     <RemainingGlyphItem key={g.unicode} g={g} font={font} borderColor={borderColor} onClick={onGlyphClick} />
                 ))}
             </div>
+            {glyphs.length > displayLimit && (
+                <div className="mt-6 flex justify-center">
+                    <button 
+                        onClick={() => setDisplayLimit(prev => prev + 120)}
+                        className="px-6 py-2 rounded-full border dark:border-gray-700 border-gray-300 dark:text-gray-400 text-gray-600 text-xs font-bold uppercase tracking-wider hover:bg-gray-800 hover:text-white transition-all"
+                    >
+                        Carregar mais {Math.min(120, glyphs.length - displayLimit)} glifos...
+                    </button>
+                </div>
+            )}
         </div>
     );
-};
+});
 
 export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompareMode = false, customLabels, onUpdateGlyph }) => {
   const { isDark } = useTheme();
+
+  // Ensure we have at least one font loaded to display analysis
+  const hasFonts = Object.values(fonts).some(f => !!f && !!f.fontObj);
+  if (!hasFonts) return <AnalysisSkeleton />;
+
   const [testText, setTestText] = useState(PARAGRAPH_TEXT);
   const [analysisPreset, setAnalysisPreset] = useState<'paragraph' | 'words-overlay' | 'custom'>(() => {
     const saved = typeof window !== 'undefined' ? localStorage.getItem('saame_analysis_preset') : null;
@@ -137,14 +195,17 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
     const saved = typeof window !== 'undefined' ? localStorage.getItem('saame_font_size') : null;
     return saved ? Number(saved) : 18;
   });
+  const debouncedFontSize = useDebounce(fontSize, 300);
 
   React.useEffect(() => {
     localStorage.setItem('saame_font_size', fontSize.toString());
   }, [fontSize]);
+
   const [lineHeight, setLineHeight] = useState(() => {
     const saved = typeof window !== 'undefined' ? localStorage.getItem('saame_line_height') : null;
     return saved ? Number(saved) : 1.5;
   });
+  const debouncedLineHeight = useDebounce(lineHeight, 300);
 
   React.useEffect(() => {
     localStorage.setItem('saame_line_height', lineHeight.toString());
@@ -163,12 +224,22 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
   const [selectedDiagramMethod, setSelectedDiagramMethod] = useState<MethodType>(MethodType.TRACY);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Memoize search query update for performance
+  const handleSearchChange = React.useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchQuery(e.target.value);
+  }, []);
+
   const [selectedAdjustment, setSelectedAdjustment] = useState<{
     char: string,
     method: MethodType,
     lsb: number,
     rsb: number
   } | null>(null);
+
+  const toggleAdjustment = React.useCallback((char: string, lsb: number, rsb: number, method: MethodType) => {
+      setSelectedAdjustment({ char, method, lsb, rsb });
+  }, []);
   const [modalTestText, setModalTestText] = useState<string>('');
   const [isModalEditing, setIsModalEditing] = useState(false);
   const [activeMethods, setActiveMethods] = useState<MethodType[]>(() => {
@@ -235,9 +306,16 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
       }
   };
 
+  const avgSBs = useMemo(() => {
+    const results: Record<string, number> = {};
+    Object.entries(fonts).forEach(([type, f]) => {
+        if (f?.fontObj) results[type] = calculateAverageSB(f.fontObj);
+    });
+    return results;
+  }, [fonts]);
+
   const getAvgSB = (type: MethodType) => {
-      const f = fonts[type];
-      return f?.fontObj ? calculateAverageSB(f.fontObj) : 0;
+      return avgSBs[type] || 0;
   };
 
   const setPreset = (text: string, size: number, presetType: 'paragraph' | 'words-overlay') => {
@@ -247,8 +325,7 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
   };
 
   // --- PRECISE METRIC CALCULATIONS ---
-  // Calculates the absolute Y positions for grid lines and text positioning
-  const calculateMetrics = () => {
+  const cachedMetrics = useMemo(() => {
       // Default fallback
       const empty = { 
           grid: '', 
@@ -370,9 +447,16 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
           refBaseline: refBaselineY,
           expCorrectionY
       };
-  };
+  }, [originalFont?.metrics, tracyFont?.metrics, fontSize, lineHeight, isDark, isCompareMode]);
 
-  const { grid, gridLight, lhPx, expCorrectionY } = calculateMetrics();
+  const { grid, gridLight, expCorrectionY } = cachedMetrics;
+
+  const fontFacesCSS = useMemo(() => {
+    return Object.values(fonts)
+        .filter((f): f is FontState => !!f)
+        .map(f => generateFontFaceCSS(f))
+        .join('\n');
+  }, [fonts]);
 
   const handlePdfExport = async () => {
     if (!exportRef.current) return;
@@ -617,7 +701,7 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
     }
   };
 
-  const ComparativeMetricsView = ({ category }: { category: 'Uppercase' | 'Lowercase' }) => {
+  const ComparativeMetricsView = React.memo(({ category }: { category: 'Uppercase' | 'Lowercase' }) => {
       const allChars = category === 'Uppercase' ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split('') : "abcdefghijklmnopqrstuvwxyz".split('');
       
       const chars = useMemo(() => {
@@ -680,9 +764,16 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
               </div>
           </div>
       );
-  };
+  });
 
-  const ExtendedComparativeView = () => {
+  const ExtendedComparativeView = React.memo(() => {
+        const [displayLimit, setDisplayLimit] = useState(60);
+
+        // Reset limit on search change
+        useEffect(() => {
+            setDisplayLimit(60);
+        }, [searchQuery]);
+
         if (!originalFont?.fontObj || !tracyFont?.fontObj) return null;
 
         const glyphs = useMemo(() => {
@@ -699,8 +790,6 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                 if (glyph.unicode) {
                     try {
                         const char = String.fromCodePoint(glyph.unicode);
-                        // Filter out standard chars (which are handled in other views)
-                        // Explicitly keep Space (char === ' ') or non-empty strings
                         if (!standardChars.has(char)) {
                             if (char.trim() !== '' || char === ' ') {
                                 found.push({ char, unicode: glyph.unicode });
@@ -719,17 +808,19 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                 : found;
 
             return filtered.sort((a, b) => a.unicode - b.unicode);
-        }, [tracyFont, searchQuery]); // Added searchQuery
+        }, [tracyFont, searchQuery]);
 
         if (glyphs.length === 0) return null;
+
+        const visibleGlyphs = glyphs.slice(0, displayLimit);
 
         return (
             <div className="mb-8 mt-12 pt-8 border-t dark:border-gray-800 border-gray-200">
                 <h4 className="text-base font-bold uppercase mb-4 tracking-wider dark:text-gray-400 text-gray-600 border-b dark:border-gray-800 border-gray-200 pb-2">
-                    Comparação de Glifos Complementares (Incl. Pontuação e Espaço)
+                    Comparação de Glifos Complementares ({glyphs.length})
                 </h4>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
-                    {glyphs.map(g => {
+                    {visibleGlyphs.map(g => {
                         const m1 = getCharMetrics(originalFont.fontObj!, g.char);
                         const m2 = getCharMetrics(tracyFont.fontObj!, g.char);
                         
@@ -775,15 +866,25 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                         )
                     })}
                 </div>
+                {glyphs.length > displayLimit && (
+                    <div className="mt-8 flex justify-center">
+                        <button 
+                            onClick={() => setDisplayLimit(prev => prev + 60)}
+                            className="px-8 py-3 rounded-xl border dark:border-gray-700 border-gray-300 dark:text-gray-400 text-gray-600 text-sm font-bold uppercase hover:bg-gray-800 hover:text-white transition-all shadow-lg"
+                        >
+                            Ver mais {glyphs.length - displayLimit} glifos complementares
+                        </button>
+                    </div>
+                )}
             </div>
         );
-  };
+  });
 
   return (
     <div className="flex flex-col h-full dark:bg-gray-900 bg-gray-100 rounded-lg overflow-hidden border dark:border-gray-700 border-gray-300 shadow-xl">
        {/* Inject Local Styles to enforce precision within this canvas context */}
        <style>
-            {Object.values(fonts).filter((f): f is FontState => !!f).map(f => generateFontFaceCSS(f)).join('\n')}
+            {fontFacesCSS}
        </style>
 
       {/* Toolbar */}
@@ -1091,9 +1192,9 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                 <div 
                     className="relative w-full overflow-y-auto max-h-[85vh] scrollbar-hide px-4"
                     style={{ 
-                        lineHeight: `${fontSize * lineHeight}px`,
+                        lineHeight: `${debouncedFontSize * debouncedLineHeight}px`,
                         backgroundImage: viewMode === 'overlay' ? 'none' : `var(--bg-grid-svg, ${grid})`,
-                        backgroundSize: `100% ${fontSize * lineHeight}px`,
+                        backgroundSize: `100% ${debouncedFontSize * debouncedLineHeight}px`,
                         backgroundAttachment: 'local'
                     }}
                 >
@@ -1102,7 +1203,7 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                         <p 
                             style={{ 
                                 fontFamily: originalFont?.fullFontFamily || 'serif', 
-                                fontSize: `${fontSize}px`,
+                                fontSize: `${debouncedFontSize}px`,
                                 color: isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)',
                                 WebkitTextStroke: 'none',
                                 transition: 'all 0.3s ease'
@@ -1118,7 +1219,7 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                         <p 
                             style={{ 
                                 fontFamily: tracyFont?.fullFontFamily || 'serif', 
-                                fontSize: `${fontSize}px`,
+                                fontSize: `${debouncedFontSize}px`,
                                 color: 'transparent',
                                 WebkitTextStroke: `1px ${isCompareMode ? (isDark ? '#06B6D4' : '#0891B2') : (isDark ? '#EC4899' : '#DB2777')}`,
                                 transform: `translateY(${expCorrectionY}px)`,
@@ -1136,7 +1237,7 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                         <p 
                             style={{ 
                                 fontFamily: sousaFont?.fullFontFamily || 'serif', 
-                                fontSize: `${fontSize}px`,
+                                fontSize: `${debouncedFontSize}px`,
                                 color: 'transparent',
                                 WebkitTextStroke: `1px ${isDark ? '#06B6D4' : '#0891B2'}`,
                                 transform: `translateY(${expCorrectionY}px)`,
@@ -1188,7 +1289,7 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                                 type="text"
                                 placeholder="Pesquisar glifo..."
                                 value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
+                                onChange={handleSearchChange}
                                 className="w-full dark:bg-gray-800 bg-gray-200 border dark:border-gray-700 border-gray-300 rounded-lg pl-10 pr-4 py-2 text-base dark:text-white text-slate-900 focus:border-blue-500 outline-none transition-all"
                             />
                             {searchQuery && (
@@ -1244,23 +1345,23 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                                        <div className="space-y-8">
                                           <SpacingDiagram 
                                               font={fonts[selectedDiagramMethod]} 
-                                              method={selectedDiagramMethod} 
+                                              method={selectedDiagramMethod as MethodType} 
                                               category="Lowercase" 
                                               searchQuery={searchQuery}
-                                              onGlyphClick={selectedDiagramMethod !== MethodType.ORIGINAL ? (char, lsb, rsb) => setSelectedAdjustment({ char, method: selectedDiagramMethod, lsb, rsb }) : undefined}
+                                              onGlyphClick={selectedDiagramMethod !== MethodType.ORIGINAL ? (char, lsb, rsb) => toggleAdjustment(char, lsb, rsb, selectedDiagramMethod as MethodType) : undefined}
                                           />
                                           <SpacingDiagram 
                                               font={fonts[selectedDiagramMethod]} 
-                                              method={selectedDiagramMethod} 
+                                              method={selectedDiagramMethod as MethodType} 
                                               category="Uppercase" 
                                               searchQuery={searchQuery}
-                                              onGlyphClick={selectedDiagramMethod !== MethodType.ORIGINAL ? (char, lsb, rsb) => setSelectedAdjustment({ char, method: selectedDiagramMethod, lsb, rsb }) : undefined}
+                                              onGlyphClick={selectedDiagramMethod !== MethodType.ORIGINAL ? (char, lsb, rsb) => toggleAdjustment(char, lsb, rsb, selectedDiagramMethod as MethodType) : undefined}
                                           />
                                           <RemainingGlyphsView 
                                               font={fonts[selectedDiagramMethod]} 
-                                              method={selectedDiagramMethod} 
+                                              method={selectedDiagramMethod as MethodType} 
                                               searchQuery={searchQuery}
-                                              onGlyphClick={selectedDiagramMethod !== MethodType.ORIGINAL ? (char, lsb, rsb) => setSelectedAdjustment({ char, method: selectedDiagramMethod, lsb, rsb }) : undefined}
+                                              onGlyphClick={selectedDiagramMethod !== MethodType.ORIGINAL ? (char, lsb, rsb) => toggleAdjustment(char, lsb, rsb, selectedDiagramMethod as MethodType) : undefined}
                                           />
                                       </div>
                                   )}
@@ -1272,20 +1373,20 @@ export const AnalysisCanvas: React.FC<AnalysisCanvasProps> = ({ fonts, isCompare
                                               category="Lowercase" 
                                               searchQuery={searchQuery}
                                               setSearchQuery={setSearchQuery}
-                                              onGlyphClick={(char, lsb, rsb) => setSelectedAdjustment({ char, method: MethodType.SOUSA, lsb, rsb })}
+                                              onGlyphClick={(char, lsb, rsb) => toggleAdjustment(char, lsb, rsb, MethodType.SOUSA)}
                                           />
                                           <SousaAnalysisView 
                                               font={sousaFont} 
                                               category="Uppercase" 
                                               searchQuery={searchQuery}
                                               setSearchQuery={setSearchQuery}
-                                              onGlyphClick={(char, lsb, rsb) => setSelectedAdjustment({ char, method: MethodType.SOUSA, lsb, rsb })}
+                                              onGlyphClick={(char, lsb, rsb) => toggleAdjustment(char, lsb, rsb, MethodType.SOUSA)}
                                           />
                                           <RemainingGlyphsView 
                                               font={sousaFont} 
                                               method={MethodType.SOUSA} 
                                               searchQuery={searchQuery}
-                                              onGlyphClick={(char, lsb, rsb) => setSelectedAdjustment({ char, method: MethodType.SOUSA, lsb, rsb })}
+                                              onGlyphClick={(char, lsb, rsb) => toggleAdjustment(char, lsb, rsb, MethodType.SOUSA)}
                                           />
                                       </div>
                                   )}

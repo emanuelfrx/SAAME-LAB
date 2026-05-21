@@ -5,6 +5,8 @@
 export type OpenTypeFont = any; 
 export type OpenTypeGlyph = any;
 
+export type DeltaMap = Record<string, { lsb?: number; rsb?: number; advanceWidth?: number }>;
+
 export enum AppStep {
   UPLOAD = 'UPLOAD',
   PREPARATION = 'PREPARATION',

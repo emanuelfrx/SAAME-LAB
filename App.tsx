@@ -22,7 +22,8 @@ import {
   parseFont,
   prepareFontForExport,
   calculateHarmonicSpacing,
-  getCharMetrics
+  getCharMetrics,
+  MetricsCache
 } from './services/fontService';
 import { FileUpload } from './components/FileUpload';
 import { MetricTuner } from './components/MetricTuner';
@@ -47,6 +48,53 @@ const App: React.FC = () => {
   const [fontBuffer, setFontBuffer] = useState<ArrayBuffer | null>(null);
   const [fontName, setFontName] = useState<string>('');
   
+  // Shared worker for background commits (Shadow Metrics)
+  const workerRef = useRef<Worker | null>(null);
+
+  useEffect(() => {
+    // Initialize shared worker
+    const worker = new Worker(new URL('./services/fontWorker.ts', import.meta.url), { type: 'module' });
+    workerRef.current = worker;
+
+    worker.onmessage = async (e) => {
+        if (e.data.action === 'APPLY_METHOD_SUCCESS') {
+            const { buffer, familyName, method } = e.data;
+            const fontObj = await parseFont(buffer);
+            const blob = new Blob([buffer], { type: 'font/opentype' });
+            const url = URL.createObjectURL(blob);
+
+            setFonts(prev => {
+                const methodKey = method === 'TRACY' ? MethodType.TRACY : 
+                                 method === 'SOUSA' ? MethodType.SOUSA : 
+                                 MethodType.ORIGINAL_CUSTOM;
+                
+                // Revoke old URL if it was a live update
+                if (prev[methodKey]?.url && prev[methodKey]?.fullFontFamily.includes('Live')) {
+                    URL.revokeObjectURL(prev[methodKey]!.url);
+                }
+
+                return {
+                    ...prev,
+                    [methodKey]: {
+                        ...prev[methodKey]!,
+                        fontObj,
+                        url,
+                        fullFontFamily: familyName
+                    }
+                };
+            });
+            setLiveUpdateStatus(null);
+        } else if (e.data.action === 'ERROR') {
+            console.error("Worker error:", e.data.error);
+            setLiveUpdateStatus(null);
+        }
+    };
+
+    return () => {
+        worker.terminate();
+    };
+  }, []);
+
   // Font States
   const [fonts, setFonts] = useState<Record<string, FontState | null>>({
     [MethodType.ORIGINAL]: null,
@@ -98,6 +146,13 @@ const App: React.FC = () => {
     setProcessingStatus({ progress: 0, status: 'Iniciando importação...', title: 'Importando Fonte' });
     setFontBuffer(buffer);
     setFontName(name);
+
+    if (workerRef.current) {
+        workerRef.current.postMessage({
+            action: 'INITIAL_PARSE',
+            buffer: buffer.slice(0)
+        });
+    }
 
     try {
         // 1. Store Original immediately (minimal processing)
@@ -152,6 +207,17 @@ const App: React.FC = () => {
                 setProcessingStatus(prev => ({ ...prev, progress: e.data.progress, status: e.data.status }));
             } else if (e.data.action === 'PROCESS_SUCCESS') {
                 const { metrics, tracy, sousa } = e.data;
+                
+                // Populate MetricsCache with pre-calculated counter metrics from worker
+                if (metrics.counterMap) {
+                    Object.entries(metrics.counterMap).forEach(([char, val]) => {
+                        MetricsCache.set(tracy.family, char, 'counter_metrics', val);
+                        MetricsCache.set(sousa.family, char, 'counter_metrics', val);
+                        if (originalState?.fullFontFamily) {
+                            MetricsCache.set(originalState.fullFontFamily, char, 'counter_metrics', val);
+                        }
+                    });
+                }
                 
                 // Convert buffers back to URLs
                 const tracyBlob = new Blob([tracy.buffer], { type: 'font/opentype' });
@@ -228,6 +294,17 @@ const App: React.FC = () => {
                 setProcessingStatus(prev => ({ ...prev, progress: e.data.progress, status: e.data.status }));
             } else if (e.data.action === 'PROCESS_SUCCESS') {
                 const { metrics, tracy, sousa } = e.data;
+                
+                // Populate MetricsCache with pre-calculated counter metrics from worker
+                if (metrics.counterMap) {
+                    Object.entries(metrics.counterMap).forEach(([char, val]) => {
+                        MetricsCache.set(tracy.family, char, 'counter_metrics', val);
+                        MetricsCache.set(sousa.family, char, 'counter_metrics', val);
+                        if (fonts[MethodType.ORIGINAL]?.fullFontFamily) {
+                            MetricsCache.set(fonts[MethodType.ORIGINAL]!.fullFontFamily, char, 'counter_metrics', val);
+                        }
+                    });
+                }
                 
                 const tracyBlob = new Blob([tracy.buffer], { type: 'font/opentype' });
                 const sousaBlob = new Blob([sousa.buffer], { type: 'font/opentype' });
@@ -321,169 +398,57 @@ const App: React.FC = () => {
     }
   };
 
-  // Debounced Tuner Update for Tracy
+  // Debounced Tuner Update for Tracy (Worker-assisted Shadow Metrics)
   useEffect(() => {
-    let active = true;
     if (fontBuffer && (step === AppStep.PREPARATION || step === AppStep.ANALYSIS)) {
-        const updateTuner = async () => {
-            if (!active) return;
-            setLiveUpdateStatus('Aplicando ajustes...');
-            await new Promise(r => setTimeout(r, 10)); // allow React to paint loader
-            if (!active) return;
-            
-            const tempFont = await parseFont(fontBuffer.slice(0));
-            if (!active) return;
-            
-            cleanMetrics(tempFont);
-            applyTracyMethod(tempFont, tracySettings);
-            
-            // Stable family name to prevent unmounting and flickering
-            const familyName = 'Tracy-Live';
-            // createFontUrl sanitizes internals automatically now
-            const url = createFontUrl(tempFont, familyName);
-
-            setFonts(prev => {
-                if (!active) return prev;
-                // Revoke old URL to avoid memory leaks
-                if (prev[MethodType.TRACY]?.url) {
-                    URL.revokeObjectURL(prev[MethodType.TRACY]!.url);
-                }
-                return { 
-                  ...prev, 
-                  [MethodType.TRACY]: { 
-                      ...prev[MethodType.TRACY]!, 
-                      fontObj: tempFont, 
-                      url,
-                      fullFontFamily: familyName
-                  } 
-                };
-            });
-            if (active) setLiveUpdateStatus(null);
+        const updateTuner = () => {
+            if (workerRef.current) {
+                setLiveUpdateStatus('Atualizando (Tracy)...');
+                workerRef.current.postMessage({
+                    action: 'APPLY_METHOD',
+                    method: 'TRACY',
+                    settings: tracySettings
+                });
+            }
         };
-        const timer = setTimeout(updateTuner, 400); // Increased debounce to prevent freezing
-        return () => { active = false; clearTimeout(timer); setLiveUpdateStatus(null); };
+        const timer = setTimeout(updateTuner, 400); 
+        return () => { clearTimeout(timer); };
     }
   }, [tracySettings, step, tuningTab, fontBuffer]);
 
-  // Debounced Tuner Update for Sousa
+  // Debounced Tuner Update for Sousa (Worker-assisted Shadow Metrics)
   useEffect(() => {
-    let active = true;
     if (fontBuffer && (step === AppStep.PREPARATION || step === AppStep.ANALYSIS)) {
-        const updateTuner = async () => {
-            if (!active) return;
-            setLiveUpdateStatus('Aplicando ajustes...');
-            await new Promise(r => setTimeout(r, 10)); // allow React to paint loader
-            if (!active) return;
-            
-            const tempFont = await parseFont(fontBuffer.slice(0));
-            if (!active) return;
-
-            cleanMetrics(tempFont);
-            applySousaMethod(tempFont, sousaSettings);
-
-            const familyName = 'Sousa-Live';
-            const url = createFontUrl(tempFont, familyName);
-            
-            setFonts(prev => {
-                if (!active) return prev;
-                if (prev[MethodType.SOUSA]?.url) {
-                    URL.revokeObjectURL(prev[MethodType.SOUSA]!.url);
-                }
-                return { 
-                  ...prev, 
-                  [MethodType.SOUSA]: { 
-                      ...prev[MethodType.SOUSA]!, 
-                      fontObj: tempFont, 
-                      url,
-                      fullFontFamily: familyName
-                  } 
-                };
-            });
-            if (active) setLiveUpdateStatus(null);
+        const updateTuner = () => {
+            if (workerRef.current) {
+                setLiveUpdateStatus('Atualizando (Sousa)...');
+                workerRef.current.postMessage({
+                    action: 'APPLY_METHOD',
+                    method: 'SOUSA',
+                    settings: sousaSettings
+                });
+            }
         };
-        const timer = setTimeout(updateTuner, 400); // Increased debounce to prevent freezing
-        return () => { active = false; clearTimeout(timer); setLiveUpdateStatus(null); };
+        const timer = setTimeout(updateTuner, 400); 
+        return () => { clearTimeout(timer); };
     }
   }, [sousaSettings, step, tuningTab, fontBuffer]);
 
-  // Debounced Tuner Update for Original Custom
+  // Debounced Tuner Update for Original Custom (Worker-assisted Shadow Metrics)
   useEffect(() => {
-    let active = true;
     if (fontBuffer && (step === AppStep.PREPARATION || step === AppStep.ANALYSIS)) {
-        const updateTuner = async () => {
-            if (!active) return;
-            setLiveUpdateStatus('Aplicando ajustes...');
-            await new Promise(r => setTimeout(r, 10)); 
-            if (!active) return;
-            
-            const tempFont = await parseFont(fontBuffer.slice(0));
-            if (!active) return;
-            
-            // cleanMetrics(tempFont); // Skip for ORIGINAL_CUSTOM to preserve original side bearings
-            applyOriginalCustomMethod(tempFont, originalCustomSettings);
-            
-            const familyName = 'OriginalCustom-Live';
-            const url = createFontUrl(tempFont, familyName);
-            
-            // Re-calculate metrics for the updated font
-            const measureMetric = (chars: string[], type: 'max' | 'min', fallback: number) => {
-              let best = fallback;
-              let found = false;
-              chars.forEach(char => {
-                  const glyph = tempFont.charToGlyph(char);
-                  if (glyph && glyph.path.commands.length > 0) {
-                      const box = glyph.getBoundingBox();
-                      if (type === 'max') {
-                          if (!found || box.y2 > best) { best = box.y2; found = true; }
-                      } else {
-                           if (!found || box.y1 < best) { best = box.y1; found = true; }
-                      }
-                  }
-              });
-              return Math.round(best);
-            };
-
-            const visAscender = measureMetric(['d', 'h', 'l', 'b', 'k', 'H'], 'max', tempFont.ascender);
-            const visDescender = measureMetric(['p', 'q', 'y', 'g'], 'min', tempFont.descender);
-
-            const xGlyph = tempFont.charToGlyph('x');
-            const hGlyph = tempFont.charToGlyph('H');
-            let xHeight = 0;
-            let capHeight = 0;
-            if (xGlyph && xGlyph.unicode) { const box = xGlyph.getBoundingBox(); xHeight = box.y2 - box.y1; }
-            if (hGlyph && hGlyph.unicode) { const box = hGlyph.getBoundingBox(); capHeight = box.y2 - box.y1; }
-
-            setFonts(prev => {
-                if (!active) return prev;
-                
-                const metrics = {
-                  ascender: visAscender,
-                  descender: visDescender,
-                  unitsPerEm: tempFont.unitsPerEm,
-                  xHeight,
-                  capHeight,
-                  chars: prev[MethodType.ORIGINAL]?.metrics.chars || []
-                };
-
-                // Revoke old URL to avoid memory leaks
-                if (prev[MethodType.ORIGINAL_CUSTOM]?.url) {
-                    URL.revokeObjectURL(prev[MethodType.ORIGINAL_CUSTOM]!.url);
-                }
-                return { 
-                  ...prev, 
-                  [MethodType.ORIGINAL_CUSTOM]: { 
-                      type: MethodType.ORIGINAL_CUSTOM,
-                      fontObj: tempFont, 
-                      url,
-                      fullFontFamily: familyName,
-                      metrics: metrics
-                  } 
-                };
-            });
-            if (active) setLiveUpdateStatus(null);
+        const updateTuner = () => {
+            if (workerRef.current) {
+                setLiveUpdateStatus('Atualizando (Custom)...');
+                workerRef.current.postMessage({
+                    action: 'APPLY_METHOD',
+                    method: 'ORIGINAL_CUSTOM',
+                    settings: originalCustomSettings
+                });
+            }
         };
         const timer = setTimeout(updateTuner, 400); 
-        return () => { active = false; clearTimeout(timer); setLiveUpdateStatus(null); };
+        return () => { clearTimeout(timer); };
     }
   }, [originalCustomSettings, step, tuningTab, fontBuffer]);
 
@@ -1223,16 +1188,16 @@ const App: React.FC = () => {
         {step === AppStep.ANALYSIS && (
             <div className="h-fit lg:h-full flex flex-col min-h-[800px] lg:min-h-0">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
-                    <h2 className="text-xl md:text-2xl font-bold dark:text-white text-slate-900 flex items-center gap-2">
-                        <MousePointerClick className="w-5 h-5 text-green-400" />
+                    <h2 className="text-xl md:text-2xl font-black dark:text-white text-slate-900 flex items-center gap-2 uppercase tracking-tighter">
+                        <MousePointerClick className="w-6 h-6 text-blue-500" />
                         Análise Comparativa
                     </h2>
                     <button 
                         onClick={() => setStep(AppStep.PREPARATION)}
-                        className="flex items-center justify-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-all shadow-lg shadow-indigo-900/20 border border-indigo-400/30 group active:scale-95 w-full sm:w-auto"
+                        className="flex items-center justify-center gap-2 px-6 py-3 bg-white hover:bg-blue-50 text-slate-950 rounded-xl transition-all shadow-xl border border-slate-200 group active:scale-95 w-full sm:w-auto font-black uppercase tracking-widest text-xs"
                     >
-                        <Settings2 className="w-4 h-4 group-hover:rotate-45 transition-transform" /> 
-                        <span className="font-bold tracking-tight">Ajustar Métricas Técnicas</span>
+                        <Settings2 className="w-4 h-4 group-hover:rotate-90 transition-all duration-500 text-blue-600" /> 
+                        Ajustar Configurações
                     </button>
                 </div>
                 <div className="flex-1 min-h-0 min-h-[600px] lg:min-h-0">

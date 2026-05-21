@@ -62,6 +62,28 @@ const DIACRITICS_MAP: Record<string, string[]> = {
     'z': ['ź','ż','ž','ẓ']
 };
 
+/**
+ * CACHE SYSTEM FOR HEAVY METRIC CALCULATIONS
+ * Persists results of counterform analysis to avoid re-calculating identical paths.
+ */
+export class MetricsCache {
+    private static cache: Map<string, any> = new Map();
+
+    static get(fontFamily: string, char: string, type: string) {
+        return this.cache.get(`${fontFamily}_${char}_${type}`);
+    }
+
+    static set(fontFamily: string, char: string, type: string, value: any) {
+        // Limit cache size to prevent memory leaks
+        if (this.cache.size > 2000) this.cache.clear();
+        this.cache.set(`${fontFamily}_${char}_${type}`, value);
+    }
+    
+    static clear() {
+        this.cache.clear();
+    }
+}
+
 
 // Helper to manipulate font binary to avoid opentype.js parsing errors with complex tables
 const stripLayoutTables = (buffer: ArrayBuffer): ArrayBuffer => {
@@ -419,14 +441,23 @@ export const downloadFont = (font: OpenTypeFont, suffix: string) => {
 export const calculateAverageSB = (font: OpenTypeFont): number => {
     let total = 0;
     let count = 0;
-    for (let i = 0; i < font.glyphs.length; i++) {
+    const numGlyphs = font.glyphs.length;
+    
+    // Sample up to 1000 glyphs, focusing on basic Latin
+    for (let i = 0; i < numGlyphs; i++) {
         const glyph = font.glyphs.get(i);
-        if(glyph.unicode && glyph.name !== 'space') {
-            const box = glyph.getBoundingBox();
-            const lsb = box.x1;
-            const rsb = glyph.advanceWidth - box.x2;
+        // Only process glyphs with unicode in basic/extended Latin range
+        if (glyph.unicode && glyph.unicode < 0x0500 && glyph.name !== 'space') {
+            // Use pre-calculated metrics if possible, otherwise fall back to bounding box ONLY if necessary
+            // In most opentype.js versions, leftSideBearing is pre-populated
+            const lsb = glyph.leftSideBearing !== undefined ? glyph.leftSideBearing : (glyph.xMin || 0);
+            const rsb = glyph.advanceWidth - (glyph.xMax || 0);
+            
             total += (lsb + rsb);
             count++;
+            
+            // Limit search for performance on massive fonts
+            if (count > 500) break;
         }
     }
     return count > 0 ? Math.round(total / (count * 2)) : 0;
@@ -486,6 +517,10 @@ export const getGlyphData = (font: OpenTypeFont, char: string) => {
 
 // --- NEW: Counter-form Analysis for Visualization ---
 export const getCounterMetrics = (font: OpenTypeFont, char: string) => {
+    const fontFamily = font.names.fontFamily?.en || 'Unknown';
+    const cached = MetricsCache.get(fontFamily, char, 'counter_metrics');
+    if (cached) return cached;
+
     const glyph = font.charToGlyph(char);
     if (!glyph) return null;
     
@@ -516,9 +551,9 @@ export const getCounterMetrics = (font: OpenTypeFont, char: string) => {
             const tolerance = (box.y2 - box.y1) * 0.25; // Increased tolerance to 25%
             
             // Adjust X by slant factor based on Y
-            const x = cmd.x !== undefined ? cmd.x - (cmd.y !== undefined ? (cmd.y - (box.y1 + box.y2)/2) * slantFactor : 0) : undefined;
+            const x = (cmd as any).x !== undefined ? (cmd as any).x - ((cmd as any).y !== undefined ? ((cmd as any).y - (box.y1 + box.y2)/2) * slantFactor : 0) : undefined;
             
-            if (cmd.y !== undefined && Math.abs(cmd.y - midY) < tolerance && x !== undefined) {
+            if ((cmd as any).y !== undefined && Math.abs((cmd as any).y - midY) < tolerance && x !== undefined) {
                 // Ensure we aren't just picking random points in the middle of a thick serifed stem
                 // Just add unique X positions, and we sort/filter them later
                 baselineX.push(x);
@@ -553,10 +588,10 @@ export const getCounterMetrics = (font: OpenTypeFont, char: string) => {
             let maxInnerY = 0;
             // The inner arch is the highest point between the inner stems that isn't the glyph top
             commands.forEach(cmd => {
-                const x = cmd.x !== undefined ? cmd.x - (cmd.y !== undefined ? (cmd.y - (box.y1 + box.y2)/2) * slantFactor : 0) : undefined;
+                const x = (cmd as any).x !== undefined ? (cmd as any).x - ((cmd as any).y !== undefined ? ((cmd as any).y - (box.y1 + box.y2)/2) * slantFactor : 0) : undefined;
                 if (x !== undefined && x > counterX + 2 && x < counterX + counterWidth - 2) {
-                    if (cmd.y !== undefined && cmd.y > maxInnerY && cmd.y < box.y2 - 10) {
-                        maxInnerY = cmd.y;
+                    if ((cmd as any).y !== undefined && (cmd as any).y > maxInnerY && (cmd as any).y < box.y2 - 10) {
+                        maxInnerY = (cmd as any).y;
                     }
                 }
             });
@@ -564,13 +599,16 @@ export const getCounterMetrics = (font: OpenTypeFont, char: string) => {
         }
     }
 
-    return {
+    const result = {
         counterWidth: Math.max(0, counterWidth),
         counterX,
         estimatedStem,
         archY,
         italicAngle // Pass this out
     };
+    
+    MetricsCache.set(fontFamily, char, 'counter_metrics', result);
+    return result;
 };
 
 /**
@@ -578,6 +616,10 @@ export const getCounterMetrics = (font: OpenTypeFont, char: string) => {
  * to allow for high-fidelity counterform visualization.
  */
 export const getCounterPathData = (font: OpenTypeFont, char: string): string | null => {
+    const fontFamily = font.names.fontFamily?.en || 'Unknown';
+    const cached = MetricsCache.get(fontFamily, char, 'counter_path');
+    if (cached) return cached;
+
     const glyph = font.charToGlyph(char);
     if (!glyph || !glyph.path || glyph.path.commands.length === 0) return null;
 
@@ -619,7 +661,10 @@ export const getCounterPathData = (font: OpenTypeFont, char: string): string | n
     // Create a path from the smallest contour
     const p = new opentype.Path();
     p.commands = validContours[0];
-    return p.toPathData(2);
+    const pathData = p.toPathData(2);
+    
+    MetricsCache.set(fontFamily, char, 'counter_path', pathData);
+    return pathData;
 };
 
 /**

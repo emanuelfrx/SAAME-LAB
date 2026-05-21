@@ -278,18 +278,92 @@ const applySousaMethod = (font, settings) => {
     });
 };
 
+
+const getCounterMetrics = (font, char) => {
+    const glyph = font.charToGlyph(char);
+    if (!glyph) return null;
+    
+    const box = glyph.getBoundingBox();
+    const width = box.x2 - box.x1;
+    const upm = font.unitsPerEm || 1000;
+    
+    // Fallback: Use weight-based estimation first
+    const weightClass = (font.tables.os2 ? font.tables.os2.usWeightClass : 400) || 400;
+    const baseStemRatio = 0.12; 
+    const weightFactor = (weightClass / 400); 
+    const estimatedStem = (upm * baseStemRatio) * Math.pow(weightFactor, 0.7); 
+    
+    let counterWidth = width - (2 * estimatedStem);
+    let counterX = box.x1 + estimatedStem;
+    let archY = (char === char.toUpperCase()) ? ((font.tables.os2 && font.tables.os2.sCapHeight) || upm * 0.7) : ((font.tables.os2 && font.tables.os2.sxHeight) || upm * 0.5);
+    
+    // Slant compensation
+    const italicAngle = (font.tables.post && font.tables.post.italicAngle) || 0;
+    const slantFactor = Math.tan((-italicAngle * Math.PI) / 180); 
+    
+    // Analytical refinement for open characters based on actual path
+    if (char === 'n' || char === 'H') {
+        const commands = glyph.path.commands;
+        const baselineX = [];
+        commands.forEach(cmd => {
+            const midY = (box.y1 + box.y2) / 2;
+            const tolerance = (box.y2 - box.y1) * 0.25;
+            const x = cmd.x !== undefined ? cmd.x - (cmd.y !== undefined ? (cmd.y - (box.y1 + box.y2)/2) * slantFactor : 0) : undefined;
+            if (cmd.y !== undefined && Math.abs(cmd.y - midY) < tolerance && x !== undefined) {
+                baselineX.push(x);
+            }
+        });
+        
+        const uniqueX = Array.from(new Set(baselineX)).sort((a,b) => a - b);
+        if (uniqueX.length >= 2) {
+             const outerL = uniqueX[0];
+             const outerR = uniqueX[uniqueX.length - 1];
+             const mid = (outerL + outerR) / 2;
+             const innerL = uniqueX.filter(x => x < mid).slice(-1)[0] || (outerL + (outerR - outerL) / 3);
+             const innerR = uniqueX.filter(x => x > mid)[0] || (outerR - (outerR - outerL) / 3);
+             counterX = innerL;
+             counterWidth = innerR - innerL;
+             counterX += (archY - (box.y1 + box.y2)/2) * slantFactor;
+        }
+
+        if (char === 'n') {
+            let maxInnerY = 0;
+            commands.forEach(cmd => {
+                const x = cmd.x !== undefined ? cmd.x - (cmd.y !== undefined ? (cmd.y - (box.y1 + box.y2)/2) * slantFactor : 0) : undefined;
+                if (x !== undefined && x > counterX + 2 && x < counterX + counterWidth - 2) {
+                    if (cmd.y !== undefined && cmd.y > maxInnerY && cmd.y < box.y2 - 10) {
+                        maxInnerY = cmd.y;
+                    }
+                }
+            });
+            if (maxInnerY > 0) archY = maxInnerY;
+        }
+    }
+
+    return { counterX, counterWidth, archY };
+};
+
+let cachedBaseFont = null;
+let cachedCleanBuffer = null;
+
 self.onmessage = async (e) => {
-    const { action, buffer, tracySettings, sousaSettings, familyNamePrefix, context } = e.data;
+    const { action, buffer, tracySettings, sousaSettings, familyNamePrefix, context, method, settings } = e.data;
     
     try {
-        if (action === 'PROCESS_ALL') {
+        if (action === 'PROCESS_ALL' || action === 'INITIAL_PARSE') {
              const isImport = context === 'IMPORT';
+             if (buffer) {
+                 cachedCleanBuffer = stripLayoutTables(buffer);
+                 cachedBaseFont = opentype.parse(cachedCleanBuffer);
+             }
+             
+             if (action === 'INITIAL_PARSE') {
+                 self.postMessage({ action: 'INITIAL_SUCCESS' });
+                 return;
+             }
 
-             // 1. Initial Parse
-             self.postMessage({ action: 'PROGRESS', progress: 5, status: isImport ? 'Lendo arquivo de fonte...' : 'Limpando tabelas...' });
-             const cleanBuffer = stripLayoutTables(buffer);
-             self.postMessage({ action: 'PROGRESS', progress: 10, status: isImport ? 'Decodificando glifos...' : 'Analisando estrutura da fonte...' });
-             const baseFont = opentype.parse(cleanBuffer);
+             const baseFont = cachedBaseFont;
+             const cleanBuffer = cachedCleanBuffer;
 
              // 2. Metrics Measurement
              self.postMessage({ action: 'PROGRESS', progress: 15, status: isImport ? 'Calculando proporções iniciais...' : 'Avaliando métricas base...' });
@@ -360,16 +434,54 @@ self.onmessage = async (e) => {
              self.postMessage({ action: 'PROGRESS', progress: 75, status: isImport ? 'Preparando método Sousa...' : 'Aplicando método Sousa...' });
              applySousaMethod(sFont, sousaSettings);
 
-             // Prepare for export and convert back to buffers
-             const prepareAndBuffer = (f, name) => {
-                if (f.tables.kern) delete f.tables.kern;
-                if (f.tables.gpos) delete f.tables.gpos;
-                prepareFontForExport(f, name);
-                ensureGlyphNames(f);
-                if (!f.tables.post) f.tables.post = {};
-                f.tables.post.version = 3;
-                return f.toArrayBuffer();
-             };
+             self.postMessage({ action: 'PROGRESS', progress: 80, status: isImport ? 'Processando contraformas...' : 'Analisando contraformas...' });
+             const counterMap = {};
+             const stdChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".split('');
+             stdChars.forEach(c => {
+                 counterMap[c] = getCounterMetrics(baseFont, c);
+             });
+
+const updateHheaTable = (font) => {
+    if (!font.tables.hhea) return;
+    
+    let minLSB = 32767;
+    let minRSB = 32767;
+    let maxExtent = -32768;
+    let maxAdvance = 0;
+    
+    for (let i = 0; i < font.glyphs.length; i++) {
+        const glyph = font.glyphs.get(i);
+        const lsb = glyph.leftSideBearing || 0;
+        const advance = glyph.advanceWidth || 0;
+        const box = glyph.getBoundingBox();
+        const rsb = advance - (box.x2 || 0);
+        const extent = box.x2 || 0;
+        
+        if (lsb < minLSB) minLSB = lsb;
+        if (rsb < minRSB) minRSB = rsb;
+        if (extent > maxExtent) maxExtent = extent;
+        if (advance > maxAdvance) maxAdvance = advance;
+    }
+    
+    font.tables.hhea.minLeftSideBearing = minLSB;
+    font.tables.hhea.minRightSideBearing = minRSB;
+    font.tables.hhea.xMaxExtent = maxExtent;
+    font.tables.hhea.advanceWidthMax = maxAdvance;
+};
+
+const prepareAndBuffer = (f, name) => {
+    if (f.tables.kern) delete f.tables.kern;
+    if (f.tables.gpos) delete f.tables.gpos;
+    prepareFontForExport(f, name);
+    ensureGlyphNames(f);
+    
+    // Crucial: Update hhea and hmtx-related values
+    updateHheaTable(f);
+    
+    if (!f.tables.post) f.tables.post = {};
+    f.tables.post.version = 3;
+    return f.toArrayBuffer();
+};
 
              const tName = `Tracy-${Date.now()}`;
              const sName = `Sousa-${Date.now()}`;
@@ -382,11 +494,45 @@ self.onmessage = async (e) => {
              self.postMessage({ action: 'PROGRESS', progress: 100, status: isImport ? 'Importação Concluída!' : 'Finalizando...' });
              self.postMessage({
                  action: 'PROCESS_SUCCESS',
-
-                 metrics,
+                 metrics: { ...metrics, counterMap },
                  tracy: { buffer: tBuffer, family: tName },
                  sousa: { buffer: sBuffer, family: sName }
              }, [tBuffer, sBuffer]);
+        } else if (action === 'APPLY_METHOD') {
+            if (!cachedCleanBuffer) {
+                throw new Error("No font buffer cached in worker");
+            }
+            
+            const tempFont = opentype.parse(cachedCleanBuffer);
+            if (method === 'TRACY') {
+                cleanMetrics(tempFont);
+                applyTracyMethod(tempFont, settings);
+            } else if (method === 'SOUSA') {
+                cleanMetrics(tempFont);
+                applySousaMethod(tempFont, settings);
+            } else if (method === 'ORIGINAL_CUSTOM') {
+                // For Original Custom, we don't clean so we preserve original SB
+                Object.keys(settings.overrides).forEach(char => {
+                    const { lsb, rsb } = settings.overrides[char];
+                    setGlyphSB(tempFont, char, lsb, rsb);
+                });
+            }
+            
+            const familyName = `${method}-Live-${Date.now()}`;
+            if (tempFont.tables.kern) delete tempFont.tables.kern;
+            if (tempFont.tables.gpos) delete tempFont.tables.gpos;
+            prepareFontForExport(tempFont, familyName);
+            ensureGlyphNames(tempFont);
+            if (!tempFont.tables.post) tempFont.tables.post = {};
+            tempFont.tables.post.version = 3;
+            
+            const buffer = tempFont.toArrayBuffer();
+            self.postMessage({
+                action: 'APPLY_METHOD_SUCCESS',
+                buffer,
+                familyName,
+                method
+            }, [buffer]);
         }
     } catch (error) {
         self.postMessage({ action: 'ERROR', error: error.message });

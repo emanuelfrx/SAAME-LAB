@@ -184,15 +184,7 @@ export const GlyphVisualizer: React.FC<GlyphVisualizerProps> = React.memo(({ cha
                 fill={rsb >= 0 ? "rgba(52, 211, 153, 0.15)" : "rgba(239, 68, 68, 0.15)"}
             />
 
-            {counterData && font?.fontObj.tables.post?.italicAngle === 0 && (
-                <CounterformRenderer 
-                    counterData={counterData} 
-                    counterPath={counterPath} 
-                    char={char} 
-                    capHeight={capHeight} 
-                    xHeight={xHeight} 
-                />
-            )}
+            {/* Removed CounterformRenderer as per request */}
 
             <g transform="scale(1,-1)">
                 <path d={pathData} fill={isDark ? "white" : "black"} fillOpacity="0.95" />

@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { FontState, OriginalCustomSettings } from '../types';
 import { GlyphVisualizer } from './GlyphVisualizer';
 import { RotateCcw, Eye, Layers, X, Edit2, Download } from 'lucide-react';
+import { useDebounce } from './useDebounce';
 
 export const OriginalCustomTuner: React.FC<{ 
     font: FontState | null, 
@@ -11,8 +12,22 @@ export const OriginalCustomTuner: React.FC<{
     settings: OriginalCustomSettings, 
     onSettingsChange: (s: OriginalCustomSettings) => void 
 }> = ({ font, originalFont, tracyFont, sousaFont, settings, onSettingsChange }) => {
+    const [localSettings, setLocalSettings] = useState<OriginalCustomSettings>(settings);
     const [selectedChar, setSelectedChar] = useState<string>('H');
     const [inputChar, setInputChar] = useState<string>('H');
+    
+    // Debounce state
+    const debouncedLocalSettings = useDebounce(localSettings, 400);
+
+    useEffect(() => {
+        if (JSON.stringify(settings) !== JSON.stringify(localSettings)) {
+            setLocalSettings(settings);
+        }
+    }, [settings]);
+
+    useEffect(() => {
+        onSettingsChange(debouncedLocalSettings);
+    }, [debouncedLocalSettings]);
     const [inputEditingChar, setInputEditingChar] = useState<string>('');
 
     const [editingChar, setEditingChar] = useState<string | null>(null);
@@ -70,11 +85,11 @@ export const OriginalCustomTuner: React.FC<{
     }, [font, targetChar]);
 
     const metrics = useMemo(() => {
-        if (settings.overrides[targetChar]) {
-            return settings.overrides[targetChar];
+        if (localSettings.overrides[targetChar]) {
+            return localSettings.overrides[targetChar];
         }
         return originalMetrics;
-    }, [targetChar, settings.overrides, originalMetrics]);
+    }, [targetChar, localSettings.overrides, originalMetrics]);
 
     const availableChars = useMemo(() => {
         if (!font || !font.fontObj) return "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789".split('');
@@ -92,22 +107,22 @@ export const OriginalCustomTuner: React.FC<{
     }, [font]);
 
     const handleMetricChange = (side: 'lsb'|'rsb', value: number) => {
-        const newOverrides = { ...settings.overrides };
+        const newOverrides = { ...localSettings.overrides };
         const currentOverride = {
             ...metrics,
             [side]: value
         };
         newOverrides[targetChar] = currentOverride;
-        onSettingsChange({ ...settings, overrides: newOverrides });
+        setLocalSettings({ ...localSettings, overrides: newOverrides });
     };
 
     const resetOverride = () => {
-        const newOverrides = { ...settings.overrides };
+        const newOverrides = { ...localSettings.overrides };
         delete newOverrides[targetChar];
-        onSettingsChange({ ...settings, overrides: newOverrides });
+        setLocalSettings({ ...localSettings, overrides: newOverrides });
     };
 
-    const hasOverride = !!settings.overrides[targetChar];
+    const hasOverride = !!localSettings.overrides[targetChar];
 
     const importMetricsFrom = (sourceFont: FontState | null, sourceName: string) => {
         if (!sourceFont || !sourceFont.fontObj) return;
@@ -117,8 +132,8 @@ export const OriginalCustomTuner: React.FC<{
         const lsb = Math.round(box.x1);
         const rsb = Math.round(glyph.advanceWidth - box.x2);
         
-        const newOverrides = { ...settings.overrides, [targetChar]: { lsb, rsb } };
-        onSettingsChange({ ...settings, overrides: newOverrides });
+        const newOverrides = { ...localSettings.overrides, [targetChar]: { lsb, rsb } };
+        setLocalSettings({ ...localSettings, overrides: newOverrides });
     };
 
     return (
@@ -398,7 +413,7 @@ export const OriginalCustomTuner: React.FC<{
                         <label className="text-xs dark:text-slate-500 text-slate-600 font-black uppercase tracking-widest mb-4 block">Seletor de Glifos</label>
                         <div className="grid grid-cols-6 sm:grid-cols-8 md:grid-cols-8 lg:grid-cols-6 xl:grid-cols-8 gap-2 h-full overflow-y-auto custom-scrollbar p-1">
                             {availableChars.map(c => {
-                                const isModified = !!settings.overrides[c];
+                                const isModified = !!localSettings.overrides[c];
                                 return (
                                     <button 
                                         key={c} 

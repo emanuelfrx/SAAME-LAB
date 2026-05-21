@@ -147,9 +147,7 @@ export const TypographicSpacingConcepts: React.FC = () => {
                <div className="flex flex-row flex-nowrap items-center justify-center gap-2 sm:gap-4 md:gap-6 text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-sans font-medium dark:text-white text-black tracking-normal w-full max-w-full leading-none">
                  <div className="relative inline-flex items-center text-center leading-none">
                     <span className="relative z-10 px-1">H</span>
-                    {/* Contraforma do H */}
-                    <div className="absolute top-[18%] bottom-[52%] left-[25%] right-[25%] z-0 bg-slate-200 dark:bg-slate-600 opacity-80" />
-                    <div className="absolute top-[52%] bottom-[15%] left-[25%] right-[25%] z-0 bg-slate-200 dark:bg-slate-600 opacity-80" />
+                    {/* Removed visual counterform area */}
                  </div>
                  
                  <ArrowRight className="w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8 text-slate-400 flex-shrink-0" />
@@ -168,7 +166,7 @@ export const TypographicSpacingConcepts: React.FC = () => {
                <div className="flex flex-row flex-nowrap items-center justify-center gap-2 sm:gap-4 md:gap-6 text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-sans font-medium dark:text-white text-black tracking-tight w-full max-w-full leading-none">
                  <div className="relative inline-flex items-center text-center leading-none">
                     <span className="relative z-10 px-1">O</span>
-                    <div className="absolute top-[22%] bottom-[22%] left-[28%] right-[28%] z-0 bg-slate-200 dark:bg-slate-600 rounded-[50%] opacity-80" />
+                    {/* Removed visual counterform area */}
                  </div>
                  
                  <ArrowRight className="w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8 text-slate-400 flex-shrink-0" />
@@ -244,13 +242,6 @@ const TracyAnimation: React.FC<{ idx: number; fontFamily?: string }> = ({ idx, f
                          className="text-7xl dark:text-white text-slate-900 font-black relative flex items-center justify-center"
                        >
                           H
-                          {idx === 1 && (
-                            <motion.div 
-                              animate={{ backgroundColor: ['rgba(59, 130, 246, 0)', 'rgba(59, 130, 246, 0.4)', 'rgba(59, 130, 246, 0)'] }}
-                              transition={{ duration: 2, repeat: Infinity }}
-                              className="absolute inset-y-2 w-[40%] bg-blue-500/40 rounded-sm"
-                            />
-                          )}
                        </div>
                        <div 
                          style={{ fontFamily: fontFamily || 'serif' }}
